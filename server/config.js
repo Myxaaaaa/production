@@ -23,8 +23,8 @@ if (onRailway && env.ALLOW_EPHEMERAL_DATA !== '1') {
   const rel = path.relative(path.resolve(volumePath), dataDir);
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     console.error(
-      `[FATAL] DATA_DIR (${dataDir}) находится вне смонтированного Volume (${volumePath}). ` +
-        'Укажите DATA_DIR внутри пути монтирования Volume.'
+      `[FATAL] DATA_DIR="${env.DATA_DIR}" (это ${dataDir}) находится вне смонтированного Volume (${volumePath}). ` +
+        `Задайте в Railway → Variables DATA_DIR=${volumePath} или удалите переменную DATA_DIR.`
     );
     process.exit(1);
   }
