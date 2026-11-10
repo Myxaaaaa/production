@@ -159,7 +159,7 @@ function CloseShiftModal({ shift, onClose, onDone }) {
         <p className="muted">
           Смена с {dateTime(shift.startAt)}. Внесите прибыль, которую вы сделали за смену.
         </p>
-        <Field label="Прибыль за смену, ₽ *">
+        <Field label="Прибыль за смену, сом *">
           <MoneyInput value={profit} onChange={(e) => setProfit(e.target.value)} autoFocus required />
         </Field>
         <Field label="Комментарий">

@@ -129,10 +129,10 @@ function UserModal({ user, onClose, onSaved }) {
         {f.role === 'operator' && (
           <>
             <div className="row3">
-              <Field label="За смену, ₽">
+              <Field label="За смену, сом">
                 <MoneyInput value={f.shiftRate} onChange={set('shiftRate')} />
               </Field>
-              <Field label="В час, ₽">
+              <Field label="В час, сом">
                 <MoneyInput value={f.hourlyRate} onChange={set('hourlyRate')} />
               </Field>
               <Field label="% прибыли">

@@ -146,7 +146,7 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
           </Field>
         )}
         <div className="row2">
-          <Field label="Сумма, ₽ *">
+          <Field label="Сумма, сом *">
             <MoneyInput value={f.amount} onChange={set('amount')} required />
           </Field>
           <Field label="Дата *">

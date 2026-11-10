@@ -37,8 +37,8 @@ const migrations = [
         name          TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         role          TEXT NOT NULL CHECK (role IN ('admin','operator')),
-        hourly_rate   INTEGER NOT NULL DEFAULT 0,  -- копеек за час
-        shift_rate    INTEGER NOT NULL DEFAULT 0,  -- копеек за смену
+        hourly_rate   INTEGER NOT NULL DEFAULT 0,  -- тыйынов за час
+        shift_rate    INTEGER NOT NULL DEFAULT 0,  -- тыйынов за смену
         percent       REAL    NOT NULL DEFAULT 0,  -- % от прибыли смены
         active        INTEGER NOT NULL DEFAULT 1,
         token_version INTEGER NOT NULL DEFAULT 0,
@@ -52,7 +52,7 @@ const migrations = [
         user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         start_at    TEXT NOT NULL,
         end_at      TEXT,
-        profit      INTEGER,                      -- копейки
+        profit      INTEGER,                      -- тыйыны
         hourly_rate INTEGER NOT NULL DEFAULT 0,   -- ставки фиксируются на момент открытия
         shift_rate  INTEGER NOT NULL DEFAULT 0,
         percent     REAL    NOT NULL DEFAULT 0,

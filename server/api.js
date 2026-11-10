@@ -447,7 +447,7 @@ admin.post('/adjustments', (req, res) => {
       const sum = new Intl.NumberFormat('ru-RU').format(fromCents(a.amount));
       db.prepare(
         'INSERT INTO notifications (kind, title, body, target_user_id, created_by) VALUES (?, ?, ?, ?, ?)'
-      ).run(a.kind, `${KIND_TITLE[a.kind]}: ${sum} ₽`, a.reason, a.user_id, req.user.id);
+      ).run(a.kind, `${KIND_TITLE[a.kind]}: ${sum} сом`, a.reason, a.user_id, req.user.id);
     }
     return db
       .prepare('SELECT a.*, u.name AS user_name FROM adjustments a JOIN users u ON u.id = a.user_id WHERE a.id = ?')

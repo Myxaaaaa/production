@@ -175,7 +175,7 @@ function ShiftModal({ shift, operators, onClose, onSaved }) {
             <input type="datetime-local" value={f.endAt} onChange={set('endAt')} />
           </Field>
         </div>
-        <Field label={`Прибыль, ₽${f.endAt ? ' *' : ''}`}>
+        <Field label={`Прибыль, сом${f.endAt ? ' *' : ''}`}>
           <MoneyInput value={f.profit} onChange={set('profit')} required={Boolean(f.endAt)} />
         </Field>
         <Field label="Комментарий">
@@ -184,10 +184,10 @@ function ShiftModal({ shift, operators, onClose, onSaved }) {
         <details className="details">
           <summary>Ставки для этой смены</summary>
           <div className="row3">
-            <Field label="За смену, ₽">
+            <Field label="За смену, сом">
               <MoneyInput value={f.shiftRate} onChange={set('shiftRate')} />
             </Field>
-            <Field label="В час, ₽">
+            <Field label="В час, сом">
               <MoneyInput value={f.hourlyRate} onChange={set('hourlyRate')} />
             </Field>
             <Field label="% прибыли">

@@ -9,7 +9,7 @@ export const bad = (message) => new HttpError(400, message);
 
 export const nowIso = () => new Date().toISOString();
 
-// Деньги храним в копейках (INTEGER), наружу отдаём в рублях.
+// Деньги храним в тыйынах (1/100 сома, INTEGER), наружу отдаём в сомах.
 export function toCents(value, field, { required = true, min = -1e10, max = 1e10 } = {}) {
   if (value === undefined || value === null || value === '') {
     if (required) throw bad(`Поле «${field}» обязательно`);

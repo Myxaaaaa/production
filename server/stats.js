@@ -8,7 +8,7 @@ export function shiftHours(s) {
   return (Date.parse(s.end_at) - Date.parse(s.start_at)) / 3600000;
 }
 
-// Заработок за смену (в копейках): ставка за смену + часы × ставка в час + % от прибыли.
+// Заработок за смену (в тыйынах): ставка за смену + часы × ставка в час + % от прибыли.
 export function shiftEarnings(s) {
   const hours = shiftHours(s);
   if (hours === null) return null;

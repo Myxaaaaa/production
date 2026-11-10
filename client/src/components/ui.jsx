@@ -194,7 +194,7 @@ export function BarChart({ series }) {
 
 const SORTS = {
   profit: { label: 'Прибыль', get: (r) => r.profit },
-  profitPerHour: { label: '₽ в час', get: (r) => r.profitPerHour },
+  profitPerHour: { label: 'сом/ч', get: (r) => r.profitPerHour },
   hours: { label: 'Часы', get: (r) => r.hours },
   shifts: { label: 'Смены', get: (r) => r.shifts },
 };

@@ -30,7 +30,7 @@ export function useApi(path) {
 }
 
 const moneyFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
-export const money = (v) => `${moneyFmt.format(v ?? 0)} ₽`;
+export const money = (v) => `${moneyFmt.format(v ?? 0)} сом`;
 export const num = (v, d = 1) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: d }).format(v ?? 0);
 
 export function hours(h) {
