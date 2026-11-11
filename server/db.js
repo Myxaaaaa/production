@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { config } from './config.js';
+import { localNow } from './util.js';
 
 export const db = new DatabaseSync(config.dbFile);
 
@@ -99,6 +100,75 @@ const migrations = [
       );
     `,
   },
+  {
+    // Смены больше не открываются вручную: у сотрудника есть график (workdays),
+    // каждый день графика — это смена. Невыход отмечается статусом 'absent' с причиной.
+    version: 2,
+    name: 'schedule',
+    up() {
+      db.exec(`
+        ALTER TABLE users ADD COLUMN default_start TEXT NOT NULL DEFAULT '10:00';
+        ALTER TABLE users ADD COLUMN default_end   TEXT NOT NULL DEFAULT '22:00';
+
+        CREATE TABLE workdays (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          date           TEXT NOT NULL,                -- YYYY-MM-DD (часовой пояс бизнеса)
+          start_time     TEXT NOT NULL,                -- HH:MM
+          end_time       TEXT NOT NULL,                -- HH:MM; не позже начала = следующий день
+          status         TEXT NOT NULL DEFAULT 'work' CHECK (status IN ('work','absent')),
+          absence_reason TEXT NOT NULL DEFAULT '',
+          absence_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          absence_at     TEXT,
+          profit         INTEGER,                      -- тыйыны; NULL — ещё не внесена
+          profit_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          profit_at      TEXT,
+          hourly_rate    INTEGER NOT NULL DEFAULT 0,
+          shift_rate     INTEGER NOT NULL DEFAULT 0,
+          percent        REAL    NOT NULL DEFAULT 0,
+          note           TEXT NOT NULL DEFAULT '',
+          created_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at     TEXT NOT NULL DEFAULT ${NOW},
+          updated_at     TEXT NOT NULL DEFAULT ${NOW},
+          CHECK (status = 'work' OR profit IS NULL)
+        );
+        CREATE UNIQUE INDEX idx_workdays_user_date ON workdays(user_id, date);
+        CREATE INDEX idx_workdays_date ON workdays(date);
+      `);
+
+      // Переносим старые смены в график: одна запись на сотрудника в день.
+      const merged = new Map();
+      for (const s of db.prepare('SELECT * FROM shifts ORDER BY user_id, start_at').all()) {
+        const start = localNow(new Date(s.start_at));
+        const end = localNow(new Date(s.end_at || Date.parse(s.start_at) + 8 * 3600000));
+        const key = `${s.user_id}|${start.date}`;
+        const m = merged.get(key);
+        if (!m) {
+          merged.set(key, { ...s, date: start.date, start_time: start.time, end_time: end.time });
+        } else {
+          m.end_time = end.time;
+          if (s.profit !== null) m.profit = (m.profit ?? 0) + s.profit;
+          if (s.note) m.note = m.note ? `${m.note}; ${s.note}` : s.note;
+        }
+      }
+      const ins = db.prepare(
+        `INSERT INTO workdays (user_id, date, start_time, end_time, profit, profit_by, profit_at, hourly_rate,
+           shift_rate, percent, note, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const m of merged.values()) {
+        ins.run(m.user_id, m.date, m.start_time, m.end_time, m.profit, m.profit === null ? null : m.user_id, m.end_at,
+          m.hourly_rate, m.shift_rate, m.percent, m.note.slice(0, 500), m.created_by, m.created_at, m.updated_at);
+      }
+      db.exec('DROP TABLE shifts');
+
+      // Бонусы и штрафы привязываем к календарной дате, как и дни графика.
+      const upd = db.prepare('UPDATE adjustments SET date = ? WHERE id = ?');
+      for (const a of db.prepare('SELECT id, date FROM adjustments').all()) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(a.date)) upd.run(localNow(new Date(a.date)).date, a.id);
+      }
+    },
+  },
 ];
 
 export function migrate() {
@@ -111,7 +181,8 @@ export function migrate() {
   for (const m of migrations) {
     if (applied.has(m.version)) continue;
     tx(() => {
-      db.exec(m.sql);
+      if (m.up) m.up();
+      else db.exec(m.sql);
       db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)').run(m.version, m.name);
     });
     console.log(`[db] применена миграция ${m.version}_${m.name}`);

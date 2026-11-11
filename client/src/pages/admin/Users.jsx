@@ -1,49 +1,67 @@
 import { useState } from 'react';
-import { api, useApi, money, num, time } from '../../lib.js';
-import { ErrorBox, Field, Icon, Loading, Modal, MoneyInput, useToast } from '../../components/ui.jsx';
+import { api, useApi, money, num, relativeDay } from '../../lib.js';
+import { Avatar, Confirm, ErrorBox, Field, Icon, Loading, Modal, MoneyInput, PageHead, StatusPill, useToast } from '../../components/ui.jsx';
+import { timeRange } from '../../components/schedule.jsx';
 import { useAuth } from '../../App.jsx';
 
 export function AdminUsers() {
   const { data, error, loading, reload } = useApi('/admin/users');
   const [editing, setEditing] = useState(null);
+  const operators = (data || []).filter((u) => u.role === 'operator');
+  const admins = (data || []).filter((u) => u.role === 'admin');
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Сотрудники</h1>
-        <button className="btn btn-primary btn-sm" onClick={() => setEditing({})}>
+      <PageHead title="Сотрудники" sub={data ? `${operators.length} сотрудников · ${admins.length} администр.` : null}>
+        <button className="btn btn-primary" onClick={() => setEditing({})}>
           <Icon name="plus" size={18} /> Добавить
         </button>
-      </div>
+      </PageHead>
       <ErrorBox error={error} onRetry={reload} />
       {loading && !data ? (
         <Loading />
       ) : (
-        <ul className="list">
-          {(data || []).map((u) => (
-            <li key={u.id}>
-              <button className={`list-row list-btn ${u.active ? '' : 'dimmed'}`} onClick={() => setEditing(u)}>
-                <div className="user-row">
-                  <span className="avatar">{u.name.trim()[0]?.toUpperCase()}</span>
-                  <div>
-                    <div className="list-title">
-                      {u.name}
-                      {u.role === 'admin' && <span className="tag">админ</span>}
-                      {!u.active && <span className="tag tag-off">заблокирован</span>}
-                      {u.openSince && <span className="tag tag-live">на смене с {time(u.openSince)}</span>}
-                    </div>
-                    <div className="muted small">{u.login}</div>
-                    {u.role === 'operator' && (
-                      <div className="muted small">
-                        {money(u.shiftRate)}/смена · {money(u.hourlyRate)}/ч · {num(u.percent, 2)}%
-                      </div>
+        <div className="people">
+          {[...operators, ...admins].map((u) => (
+            <button key={u.id} className={`person card ${u.active ? '' : 'is-dim'}`} onClick={() => setEditing(u)}>
+              <div className="person-top">
+                <Avatar name={u.name} size="lg" />
+                <div className="person-name">
+                  <b>{u.name}</b>
+                  <span>{u.login}</span>
+                </div>
+                {u.role === 'admin' && <span className="tag">админ</span>}
+                {!u.active && <span className="tag tag-off">заблокирован</span>}
+              </div>
+              {u.role === 'operator' && (
+                <>
+                  <div className="person-row">
+                    <span>Сегодня</span>
+                    {u.today ? (
+                      <span className="person-today">
+                        {timeRange(u.today)} <StatusPill state={u.today.state} />
+                      </span>
+                    ) : (
+                      <span className="muted">выходной{u.nextDate ? ` · след. ${relativeDay(u.nextDate)}` : ''}</span>
                     )}
                   </div>
-                </div>
-              </button>
-            </li>
+                  <div className="person-row">
+                    <span>Смена по умолчанию</span>
+                    <b>
+                      {u.defaultStart}–{u.defaultEnd}
+                    </b>
+                  </div>
+                  <div className="person-row">
+                    <span>Ставки</span>
+                    <b>
+                      {money(u.shiftRate)} · {money(u.hourlyRate)}/ч · {num(u.percent, 2)}%
+                    </b>
+                  </div>
+                </>
+              )}
+            </button>
           ))}
-        </ul>
+        </div>
       )}
       {editing && (
         <UserModal
@@ -72,10 +90,12 @@ function UserModal({ user, onClose, onSaved }) {
     shiftRate: user.shiftRate ?? 0,
     hourlyRate: user.hourlyRate ?? 0,
     percent: user.percent ?? 0,
-    applyToOpenShift: false,
+    defaultStart: user.defaultStart ?? '10:00',
+    defaultEnd: user.defaultEnd ?? '22:00',
   });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
   const isMe = user.id === me.id;
 
@@ -87,7 +107,7 @@ function UserModal({ user, onClose, onSaved }) {
     if (!body.password) delete body.password;
     try {
       await api(isNew ? '/admin/users' : `/admin/users/${user.id}`, { method: isNew ? 'POST' : 'PUT', body });
-      toast(isNew ? 'Сотрудник добавлен' : 'Изменения сохранены');
+      toast(isNew ? 'Сотрудник добавлен. Теперь заполните ему график.' : 'Изменения сохранены');
       onSaved();
     } catch (err) {
       setError(err.message);
@@ -96,38 +116,50 @@ function UserModal({ user, onClose, onSaved }) {
   };
 
   const remove = async () => {
-    if (!confirm(`Удалить учётную запись «${user.name}»? Вход станет невозможен, история смен сохранится в статистике.`)) return;
+    setBusy(true);
     try {
       await api(`/admin/users/${user.id}`, { method: 'DELETE' });
       toast('Учётная запись удалена');
       onSaved();
     } catch (err) {
+      setConfirm(false);
       setError(err.message);
+      setBusy(false);
     }
   };
 
   return (
-    <Modal title={isNew ? 'Новый сотрудник' : user.name} onClose={onClose}>
+    <Modal title={isNew ? 'Новый сотрудник' : user.name} sub={isNew ? null : user.login} onClose={onClose}>
       <form className="form" onSubmit={submit} autoComplete="off">
-        <Field label="Имя *">
+        <Field label="Имя">
           <input value={f.name} onChange={set('name')} required maxLength={80} />
         </Field>
         <div className="row2">
-          <Field label="Логин *" hint="Латиница, цифры, . _ -">
+          <Field label="Логин" hint="Латиница, цифры, . _ -">
             <input value={f.login} onChange={set('login')} required autoCapitalize="none" autoCorrect="off" />
           </Field>
-          <Field label={isNew ? 'Пароль *' : 'Новый пароль'} hint={isNew ? 'Не короче 8 символов' : 'Пусто — не менять'}>
+          <Field label={isNew ? 'Пароль' : 'Новый пароль'} hint={isNew ? 'Не короче 8 символов' : 'Пусто — не менять'}>
             <input value={f.password} onChange={set('password')} required={isNew} minLength={8} autoComplete="new-password" />
           </Field>
         </div>
         <Field label="Роль">
           <select value={f.role} onChange={set('role')} disabled={isMe}>
-            <option value="operator">Оператор</option>
+            <option value="operator">Сотрудник (работает по графику)</option>
             <option value="admin">Администратор</option>
           </select>
         </Field>
         {f.role === 'operator' && (
           <>
+            <div className="form-group-title">Смена по умолчанию</div>
+            <div className="row2">
+              <Field label="Начало">
+                <input type="time" value={f.defaultStart} onChange={set('defaultStart')} required />
+              </Field>
+              <Field label="Конец" hint={f.defaultEnd <= f.defaultStart ? 'на следующий день' : null}>
+                <input type="time" value={f.defaultEnd} onChange={set('defaultEnd')} required />
+              </Field>
+            </div>
+            <div className="form-group-title">Ставки</div>
             <div className="row3">
               <Field label="За смену, сом">
                 <MoneyInput value={f.shiftRate} onChange={set('shiftRate')} />
@@ -139,27 +171,22 @@ function UserModal({ user, onClose, onSaved }) {
                 <MoneyInput value={f.percent} onChange={set('percent')} />
               </Field>
             </div>
-            <p className="muted small">
-              Зарплата за смену = ставка за смену + часы × ставка в час + % от прибыли. Новые ставки действуют для новых смен.
+            <p className="small muted">
+              Зарплата за смену = ставка за смену + часы × ставка в час + % от прибыли. Новые ставки применяются к сменам с сегодняшнего дня,
+              прошедшие смены не пересчитываются.
             </p>
-            {user.openSince && (
-              <label className="check">
-                <input type="checkbox" checked={f.applyToOpenShift} onChange={set('applyToOpenShift')} />
-                Применить новые ставки и к текущей открытой смене
-              </label>
-            )}
           </>
         )}
         {!isNew && !isMe && (
           <label className="check">
             <input type="checkbox" checked={f.active} onChange={set('active')} />
-            Учётная запись активна (может входить)
+            <span>Учётная запись активна (может входить)</span>
           </label>
         )}
         {error && <div className="alert alert-error">{error}</div>}
         <div className="form-actions">
           {!isNew && !isMe && (
-            <button type="button" className="btn btn-ghost btn-danger-text" onClick={remove}>
+            <button type="button" className="btn btn-ghost btn-danger-text" onClick={() => setConfirm(true)}>
               Удалить
             </button>
           )}
@@ -168,6 +195,15 @@ function UserModal({ user, onClose, onSaved }) {
           </button>
         </div>
       </form>
+      {confirm && (
+        <Confirm
+          title={`Удалить «${user.name}»?`}
+          text="Вход станет невозможен, будущие смены уберутся из графика. История смен и выплат сохранится в статистике."
+          busy={busy}
+          onConfirm={remove}
+          onClose={() => setConfirm(false)}
+        />
+      )}
     </Modal>
   );
 }

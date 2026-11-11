@@ -14,8 +14,34 @@ import {
   verifyPassword,
 } from './auth.js';
 import { snapshot } from './backup.js';
-import { computeStats, publicAdjustment, publicShift, userSummary } from './stats.js';
-import { HttpError, bad, fromCents, nowIso, parseRange, toCents, toIso, toId, toNumber, toText } from './util.js';
+import {
+  DAY_SQL,
+  PROFIT_EDIT_DAYS,
+  computeAnalytics,
+  computeStats,
+  employeePerms,
+  publicAdjustment,
+  publicDay,
+  userSummary,
+} from './stats.js';
+import {
+  HttpError,
+  addDays,
+  bad,
+  daysBetween,
+  fromCents,
+  localNow,
+  nowIso,
+  parseRange,
+  toCents,
+  toDateKey,
+  toId,
+  toIdList,
+  toNumber,
+  toText,
+  toTime,
+  weekday,
+} from './util.js';
 
 export const api = Router();
 
@@ -42,17 +68,14 @@ function publicUser(u) {
     hourlyRate: fromCents(u.hourly_rate),
     shiftRate: fromCents(u.shift_rate),
     percent: u.percent,
+    defaultStart: u.default_start,
+    defaultEnd: u.default_end,
     createdAt: u.created_at,
   };
 }
 
-const getShift = (id) =>
-  db.prepare('SELECT s.*, u.name AS user_name FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = ?').get(id);
-const getOpenShift = (userId) =>
-  db
-    .prepare('SELECT s.*, u.name AS user_name FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.user_id = ? AND s.end_at IS NULL')
-    .get(userId);
 const getUser = (id) => db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(id);
+const getDay = (id) => db.prepare(`${DAY_SQL} WHERE w.id = ?`).get(id);
 
 /* ---------- Авторизация ---------- */
 
@@ -93,45 +116,87 @@ api.post('/auth/password', async (req, res) => {
   res.json({ ok: true });
 });
 
-/* ---------- Смена сотрудника ---------- */
+/* ---------- График сотрудника ---------- */
 
-api.get('/shifts/current', (req, res) => {
-  const s = getOpenShift(req.user.id);
-  res.json(s ? publicShift(s) : null);
+const ABSENCE_REASON = { min: 2, max: 300 };
+
+api.get('/me/schedule', (req, res) => {
+  const { from, to } = parseRange(req.query);
+  const now = localNow();
+  const days = db.prepare(`${DAY_SQL} WHERE w.user_id = ? AND w.date >= ? AND w.date < ? ORDER BY w.date`).all(req.user.id, from, to);
+  res.json({ now, days: days.map((d) => publicDay(d, now, true)) });
 });
 
-api.post('/shifts/open', (req, res) => {
-  const shift = tx(() => {
-    if (getOpenShift(req.user.id)) throw new HttpError(409, 'У вас уже есть открытая смена');
-    const u = req.user;
-    const r = db
-      .prepare(
-        'INSERT INTO shifts (user_id, start_at, hourly_rate, shift_rate, percent, created_by) VALUES (?, ?, ?, ?, ?, ?)'
-      )
-      .run(u.id, nowIso(), u.hourly_rate, u.shift_rate, u.percent, u.id);
-    return getShift(Number(r.lastInsertRowid));
+// Ближайшие дни: сегодняшняя смена, следующие смены и дни без внесённой прибыли.
+api.get('/me/today', (req, res) => {
+  const now = localNow();
+  const rows = db
+    .prepare(`${DAY_SQL} WHERE w.user_id = ? AND w.date >= ? AND w.date <= ? ORDER BY w.date`)
+    .all(req.user.id, addDays(now.date, -PROFIT_EDIT_DAYS - 1), addDays(now.date, 60));
+  const days = rows.map((d) => publicDay(d, now, true));
+  // Ночная смена со вчерашнего дня ещё может идти — тогда показываем её как текущую.
+  const current = days.find((d) => d.state === 'active') ?? days.find((d) => d.date === now.date) ?? null;
+  res.json({
+    now,
+    current,
+    upcoming: days.filter((d) => d.state === 'planned' && d !== current).slice(0, 5),
+    needsProfit: days.filter((d) => d.state === 'needs_profit' && d.canEditProfit && d !== current),
   });
-  res.status(201).json(publicShift(shift));
 });
 
-api.post('/shifts/close', (req, res) => {
+function ownDay(req) {
+  const d = getDay(toId(req.params.id, 'Смена не найдена'));
+  if (!d || d.user_id !== req.user.id) throw new HttpError(404, 'Смена не найдена');
+  return d;
+}
+
+function sendOwnDay(res, id) {
+  res.json(publicDay(getDay(id), localNow(), true));
+}
+
+api.put('/me/days/:id/profit', (req, res) => {
   const profit = toCents(req.body?.profit, 'Прибыль за смену');
   const note = toText(req.body?.note, 'Комментарий', { max: 500 });
-  const shift = tx(() => {
-    const s = getOpenShift(req.user.id);
-    if (!s) throw new HttpError(409, 'Нет открытой смены');
-    let end = nowIso();
-    if (end <= s.start_at) end = new Date(Date.parse(s.start_at) + 1000).toISOString();
-    db.prepare('UPDATE shifts SET end_at = ?, profit = ?, note = ?, updated_at = ? WHERE id = ?').run(
-      end,
-      profit,
-      note,
-      nowIso(),
-      s.id
+  const id = tx(() => {
+    const d = ownDay(req);
+    if (!employeePerms(d, req.user.id, localNow()).canEditProfit) {
+      throw new HttpError(403, d.status === 'absent' ? 'В этот день отмечен невыход' : 'Прибыль за этот день может изменить только администратор');
+    }
+    db.prepare('UPDATE workdays SET profit = ?, note = ?, profit_by = ?, profit_at = ?, updated_at = ? WHERE id = ?').run(
+      profit, note, req.user.id, nowIso(), nowIso(), d.id
     );
-    return getShift(s.id);
+    return d.id;
   });
-  res.json(publicShift(shift));
+  sendOwnDay(res, id);
+});
+
+api.post('/me/days/:id/absence', (req, res) => {
+  const reason = toText(req.body?.reason, 'Причина', ABSENCE_REASON);
+  const id = tx(() => {
+    const d = ownDay(req);
+    if (!employeePerms(d, req.user.id, localNow()).canMarkAbsent) {
+      throw new HttpError(409, d.status === 'absent' ? 'Невыход уже отмечен' : 'По этой смене уже внесена прибыль');
+    }
+    db.prepare(
+      `UPDATE workdays SET status = 'absent', absence_reason = ?, absence_by = ?, absence_at = ?, updated_at = ? WHERE id = ?`
+    ).run(reason, req.user.id, nowIso(), nowIso(), d.id);
+    return d.id;
+  });
+  sendOwnDay(res, id);
+});
+
+api.delete('/me/days/:id/absence', (req, res) => {
+  const id = tx(() => {
+    const d = ownDay(req);
+    if (!employeePerms(d, req.user.id, localNow()).canUnmarkAbsent) {
+      throw new HttpError(403, 'Снять эту отметку может только администратор');
+    }
+    db.prepare(
+      `UPDATE workdays SET status = 'work', absence_reason = '', absence_by = NULL, absence_at = NULL, updated_at = ? WHERE id = ?`
+    ).run(nowIso(), d.id);
+    return d.id;
+  });
+  sendOwnDay(res, id);
 });
 
 /* ---------- Статистика ---------- */
@@ -230,14 +295,26 @@ function activeAdminsExcept(id) {
 }
 
 admin.get('/users', (req, res) => {
+  const now = localNow();
   const rows = db
-    .prepare(
-      `SELECT u.*, (SELECT start_at FROM shifts s WHERE s.user_id = u.id AND s.end_at IS NULL) AS open_since
-       FROM users u WHERE u.deleted_at IS NULL ORDER BY u.role = 'admin', u.name COLLATE NOCASE`
-    )
+    .prepare(`SELECT u.* FROM users u WHERE u.deleted_at IS NULL ORDER BY u.role = 'admin', u.name COLLATE NOCASE`)
     .all();
-  res.json(rows.map((u) => ({ ...publicUser(u), openSince: u.open_since })));
+  const today = new Map(db.prepare(`${DAY_SQL} WHERE w.date = ?`).all(now.date).map((d) => [d.user_id, publicDay(d, now)]));
+  const next = new Map(
+    db
+      .prepare(`SELECT user_id, MIN(date) AS date FROM workdays WHERE date > ? AND status = 'work' GROUP BY user_id`)
+      .all(now.date)
+      .map((r) => [r.user_id, r.date])
+  );
+  res.json(rows.map((u) => ({ ...publicUser(u), today: today.get(u.id) ?? null, nextDate: next.get(u.id) ?? null })));
 });
+
+function readDefaults(body, current) {
+  return {
+    default_start: body.defaultStart !== undefined ? toTime(body.defaultStart, 'Начало смены') : (current?.default_start ?? '10:00'),
+    default_end: body.defaultEnd !== undefined ? toTime(body.defaultEnd, 'Конец смены') : (current?.default_end ?? '22:00'),
+  };
+}
 
 admin.post('/users', async (req, res) => {
   const b = req.body ?? {};
@@ -247,13 +324,15 @@ admin.post('/users', async (req, res) => {
   if (password.length < 8) throw bad('Пароль должен быть не короче 8 символов');
   const role = b.role === 'admin' ? 'admin' : 'operator';
   const rates = readRates(b);
+  const defaults = readDefaults(b);
   assertLoginFree(login);
   const hash = await hashPassword(password);
   const r = db
     .prepare(
-      'INSERT INTO users (login, name, password_hash, role, hourly_rate, shift_rate, percent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      `INSERT INTO users (login, name, password_hash, role, hourly_rate, shift_rate, percent, default_start, default_end)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(login, name, hash, role, rates.hourly_rate, rates.shift_rate, rates.percent);
+    .run(login, name, hash, role, rates.hourly_rate, rates.shift_rate, rates.percent, defaults.default_start, defaults.default_end);
   res.status(201).json(publicUser(getUser(Number(r.lastInsertRowid))));
 });
 
@@ -267,6 +346,7 @@ admin.put('/users/:id', async (req, res) => {
   const role = b.role === undefined ? u.role : b.role === 'admin' ? 'admin' : 'operator';
   const active = b.active === undefined ? u.active : b.active ? 1 : 0;
   const rates = readRates(b, u);
+  const defaults = readDefaults(b, u);
   const password = b.password ? String(b.password) : '';
   if (password && password.length < 8) throw bad('Пароль должен быть не короче 8 символов');
   if (id === req.user.id && (role !== 'admin' || !active)) {
@@ -278,133 +358,279 @@ admin.put('/users/:id', async (req, res) => {
   assertLoginFree(login, id);
   const hash = password ? await hashPassword(password) : u.password_hash;
   const bump = password || !active || role !== u.role ? 1 : 0;
+  const ratesChanged = rates.hourly_rate !== u.hourly_rate || rates.shift_rate !== u.shift_rate || rates.percent !== u.percent;
   tx(() => {
     db.prepare(
       `UPDATE users SET login = ?, name = ?, role = ?, active = ?, password_hash = ?, hourly_rate = ?, shift_rate = ?,
-         percent = ?, token_version = token_version + ?, updated_at = ? WHERE id = ?`
-    ).run(login, name, role, active, hash, rates.hourly_rate, rates.shift_rate, rates.percent, bump, nowIso(), id);
-    // По желанию новые ставки применяются и к текущей открытой смене.
-    if (b.applyToOpenShift) {
-      db.prepare('UPDATE shifts SET hourly_rate = ?, shift_rate = ?, percent = ?, updated_at = ? WHERE user_id = ? AND end_at IS NULL').run(
-        rates.hourly_rate,
-        rates.shift_rate,
-        rates.percent,
-        nowIso(),
-        id
+         percent = ?, default_start = ?, default_end = ?, token_version = token_version + ?, updated_at = ? WHERE id = ?`
+    ).run(login, name, role, active, hash, rates.hourly_rate, rates.shift_rate, rates.percent, defaults.default_start,
+      defaults.default_end, bump, nowIso(), id);
+    // Новые ставки действуют с сегодняшнего дня; прошедшие смены не пересчитываются.
+    if (ratesChanged) {
+      db.prepare('UPDATE workdays SET hourly_rate = ?, shift_rate = ?, percent = ?, updated_at = ? WHERE user_id = ? AND date >= ?').run(
+        rates.hourly_rate, rates.shift_rate, rates.percent, nowIso(), id, localNow().date
       );
     }
   });
   res.json(publicUser(getUser(id)));
 });
 
-// Удаление «мягкое»: история смен и выплат сохраняется для статистики.
+// Удаление «мягкое»: история смен и выплат сохраняется для статистики, будущий график удаляется.
 admin.delete('/users/:id', (req, res) => {
   const id = toId(req.params.id);
   if (id === req.user.id) throw bad('Нельзя удалить свою учётную запись');
   const u = getUser(id);
   if (!u) throw new HttpError(404, 'Сотрудник не найден');
   if (u.role === 'admin' && activeAdminsExcept(id) === 0) throw bad('Должен остаться хотя бы один администратор');
-  if (getOpenShift(id)) throw new HttpError(409, 'У сотрудника открыта смена — сначала закройте её');
-  db.prepare(
-    `UPDATE users SET deleted_at = ?, active = 0, login = login || '#deleted-' || id,
-       token_version = token_version + 1, updated_at = ? WHERE id = ?`
-  ).run(nowIso(), nowIso(), id);
+  tx(() => {
+    db.prepare(
+      `UPDATE users SET deleted_at = ?, active = 0, login = login || '#deleted-' || id,
+         token_version = token_version + 1, updated_at = ? WHERE id = ?`
+    ).run(nowIso(), nowIso(), id);
+    db.prepare('DELETE FROM workdays WHERE user_id = ? AND date > ? AND profit IS NULL').run(id, localNow().date);
+  });
   res.json({ ok: true });
 });
 
-/* ---------- Смены ---------- */
+/* ---------- График ---------- */
 
-admin.get('/shifts', (req, res) => {
+admin.get('/schedule', (req, res) => {
   const { from, to } = parseRange(req.query);
-  const params = [from, to];
-  let sql = `SELECT s.*, u.name AS user_name FROM shifts s JOIN users u ON u.id = s.user_id
-             WHERE s.start_at >= ? AND s.start_at < ?`;
-  if (req.query.userId) {
-    sql += ' AND s.user_id = ?';
-    params.push(toId(req.query.userId));
-  }
-  if (req.query.status === 'open') sql += ' AND s.end_at IS NULL';
-  if (req.query.status === 'closed') sql += ' AND s.end_at IS NOT NULL';
-  sql += ' ORDER BY s.start_at DESC LIMIT 2000';
-  // Открытые смены показываем всегда, даже если начаты до выбранного периода.
-  const rows = db.prepare(sql).all(...params);
-  if (req.query.status !== 'closed') {
-    const ids = new Set(rows.map((r) => r.id));
-    const open = db
-      .prepare('SELECT s.*, u.name AS user_name FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.end_at IS NULL')
-      .all()
-      .filter((s) => !ids.has(s.id) && (!req.query.userId || s.user_id === Number(req.query.userId)));
-    rows.unshift(...open);
-  }
-  res.json(rows.map(publicShift));
+  const now = localNow();
+  const users = db
+    .prepare(
+      `SELECT * FROM users WHERE role = 'operator' AND (deleted_at IS NULL OR id IN
+         (SELECT user_id FROM workdays WHERE date >= ? AND date < ?))
+       ORDER BY deleted_at IS NOT NULL, active DESC, name COLLATE NOCASE`
+    )
+    .all(from, to);
+  const days = db.prepare(`${DAY_SQL} WHERE w.date >= ? AND w.date < ? ORDER BY w.date`).all(from, to);
+  res.json({
+    now,
+    users: users.map((u) => ({ ...publicUser(u), deleted: Boolean(u.deleted_at) })),
+    days: days.map((d) => publicDay(d, now)),
+  });
 });
 
-function readShift(b, current) {
-  const userId = current ? current.user_id : toId(b.userId, 'Выберите сотрудника');
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-  if (!user || (!current && user.deleted_at)) throw bad('Сотрудник не найден');
-  const startAt = b.startAt !== undefined ? toIso(b.startAt, 'Начало смены') : current.start_at;
-  const endAt = b.endAt !== undefined ? toIso(b.endAt, 'Конец смены', { required: false }) : current.end_at;
-  const profit = b.profit !== undefined ? toCents(b.profit, 'Прибыль', { required: false }) : current.profit;
-  if (endAt && endAt <= startAt) throw bad('Конец смены должен быть позже начала');
-  if (endAt && profit === null) throw bad('Для закрытой смены укажите прибыль');
-  const base = current ?? user;
-  return {
-    user_id: userId,
-    start_at: startAt,
-    end_at: endAt,
-    profit: endAt ? profit : (profit ?? null),
-    note: b.note !== undefined ? toText(b.note, 'Комментарий', { max: 500 }) : (current?.note ?? ''),
-    ...readRates(b, base),
-  };
+function operatorOrFail(id) {
+  const u = getUser(id);
+  if (!u || u.role !== 'operator') throw bad('Сотрудник не найден');
+  return u;
 }
 
-function uniqueOpenGuard(fn) {
+function uniqueDayGuard(fn) {
   try {
     return fn();
   } catch (e) {
-    if (String(e.message).includes('idx_shifts_one_open')) {
-      throw new HttpError(409, 'У сотрудника уже есть открытая смена');
-    }
+    if (String(e.message).includes('UNIQUE')) throw new HttpError(409, 'У сотрудника уже есть смена в этот день');
     throw e;
   }
 }
 
-admin.post('/shifts', (req, res) => {
-  const s = readShift(req.body ?? {});
-  const id = uniqueOpenGuard(
-    () =>
+// Невыход, отмеченный администратором, приходит сотруднику уведомлением.
+function notifyAbsence(day, adminId) {
+  const when = new Date(`${day.date}T00:00:00Z`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+  db.prepare('INSERT INTO notifications (kind, title, body, target_user_id, created_by) VALUES (?, ?, ?, ?, ?)').run(
+    'info',
+    `Отмечен невыход ${when}`,
+    day.absence_reason,
+    day.user_id,
+    adminId
+  );
+}
+
+// Создание или правка дня администратором: время, прибыль, невыход, ставки.
+function readDay(b, current) {
+  const user = current ? null : operatorOrFail(toId(b.userId, 'Выберите сотрудника'));
+  const status = b.status !== undefined ? (b.status === 'absent' ? 'absent' : 'work') : (current?.status ?? 'work');
+  const d = {
+    user_id: current ? current.user_id : user.id,
+    date: b.date !== undefined || !current ? toDateKey(b.date, 'Дата') : current.date,
+    start_time: b.startTime !== undefined ? toTime(b.startTime, 'Начало') : (current?.start_time ?? user.default_start),
+    end_time: b.endTime !== undefined ? toTime(b.endTime, 'Конец') : (current?.end_time ?? user.default_end),
+    status,
+    note: b.note !== undefined ? toText(b.note, 'Комментарий', { max: 500 }) : (current?.note ?? ''),
+    ...readRates(b, current ?? user),
+  };
+  if (status === 'absent') {
+    d.profit = null;
+    d.absence_reason =
+      b.absenceReason !== undefined ? toText(b.absenceReason, 'Причина', ABSENCE_REASON) : current?.absence_reason || '';
+    if (!d.absence_reason) throw bad('Укажите причину невыхода');
+  } else {
+    d.profit = b.profit !== undefined ? toCents(b.profit, 'Прибыль', { required: false }) : (current?.profit ?? null);
+    d.absence_reason = '';
+  }
+  return d;
+}
+
+admin.post('/days', (req, res) => {
+  const d = readDay(req.body ?? {});
+  const now = nowIso();
+  const absent = d.status === 'absent';
+  const id = tx(() => {
+    const id = uniqueDayGuard(
+      () =>
+        db
+          .prepare(
+            `INSERT INTO workdays (user_id, date, start_time, end_time, status, absence_reason, absence_by, absence_at,
+               profit, profit_by, profit_at, hourly_rate, shift_rate, percent, note, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            d.user_id,
+            d.date,
+            d.start_time,
+            d.end_time,
+            d.status,
+            d.absence_reason,
+            absent ? req.user.id : null,
+            absent ? now : null,
+            d.profit,
+            d.profit === null ? null : req.user.id,
+            d.profit === null ? null : now,
+            d.hourly_rate,
+            d.shift_rate,
+            d.percent,
+            d.note,
+            req.user.id
+          ).lastInsertRowid
+    );
+    if (absent) notifyAbsence(d, req.user.id);
+    return Number(id);
+  });
+  res.status(201).json(publicDay(getDay(id), localNow()));
+});
+
+admin.put('/days/:id', (req, res) => {
+  const id = toId(req.params.id);
+  tx(() => {
+    const current = getDay(id);
+    if (!current) throw new HttpError(404, 'Смена не найдена');
+    const d = readDay(req.body ?? {}, current);
+    const now = nowIso();
+    const absent = d.status === 'absent';
+    const becameAbsent = absent && current.status !== 'absent';
+    const absenceChanged = becameAbsent || (absent && d.absence_reason !== current.absence_reason);
+    const profitChanged = d.profit !== current.profit;
+    uniqueDayGuard(() =>
       db
         .prepare(
-          `INSERT INTO shifts (user_id, start_at, end_at, profit, note, hourly_rate, shift_rate, percent, created_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `UPDATE workdays SET date = ?, start_time = ?, end_time = ?, status = ?, absence_reason = ?,
+             absence_by = ?, absence_at = ?, profit = ?, profit_by = ?, profit_at = ?,
+             hourly_rate = ?, shift_rate = ?, percent = ?, note = ?, updated_at = ? WHERE id = ?`
         )
-        .run(s.user_id, s.start_at, s.end_at, s.profit, s.note, s.hourly_rate, s.shift_rate, s.percent, req.user.id)
-        .lastInsertRowid
-  );
-  res.status(201).json(publicShift(getShift(Number(id))));
+        .run(
+          d.date,
+          d.start_time,
+          d.end_time,
+          d.status,
+          d.absence_reason,
+          absent ? (absenceChanged ? req.user.id : current.absence_by) : null,
+          absent ? (absenceChanged ? now : current.absence_at) : null,
+          d.profit,
+          d.profit === null ? null : profitChanged ? req.user.id : current.profit_by,
+          d.profit === null ? null : profitChanged ? now : current.profit_at,
+          d.hourly_rate,
+          d.shift_rate,
+          d.percent,
+          d.note,
+          now,
+          id
+        )
+    );
+    if (becameAbsent) notifyAbsence(d, req.user.id);
+  });
+  res.json(publicDay(getDay(id), localNow()));
 });
 
-admin.put('/shifts/:id', (req, res) => {
-  const id = toId(req.params.id);
-  const current = getShift(id);
-  if (!current) throw new HttpError(404, 'Смена не найдена');
-  const s = readShift(req.body ?? {}, current);
-  uniqueOpenGuard(() =>
-    db
-      .prepare(
-        `UPDATE shifts SET start_at = ?, end_at = ?, profit = ?, note = ?, hourly_rate = ?, shift_rate = ?, percent = ?,
-           updated_at = ? WHERE id = ?`
-      )
-      .run(s.start_at, s.end_at, s.profit, s.note, s.hourly_rate, s.shift_rate, s.percent, nowIso(), id)
-  );
-  res.json(publicShift(getShift(id)));
-});
-
-admin.delete('/shifts/:id', (req, res) => {
-  const r = db.prepare('DELETE FROM shifts WHERE id = ?').run(toId(req.params.id));
+admin.delete('/days/:id', (req, res) => {
+  const r = db.prepare('DELETE FROM workdays WHERE id = ?').run(toId(req.params.id));
   if (!r.changes) throw new HttpError(404, 'Смена не найдена');
   res.json({ ok: true });
+});
+
+function readFillRange(b) {
+  const from = toDateKey(b.from, 'С даты');
+  const to = toDateKey(b.to, 'По дату');
+  if (to < from) throw bad('Дата окончания раньше даты начала');
+  if (daysBetween(from, to) > 370) throw bad('Заполнять можно не больше чем на год');
+  return { from, to };
+}
+
+// Заполнение графика по шаблону: дни недели или «N через M».
+admin.post('/schedule/fill', (req, res) => {
+  const b = req.body ?? {};
+  const users = toIdList(b.userIds, 'сотрудников').map(operatorOrFail);
+  const { from, to } = readFillRange(b);
+  let isWork;
+  if (b.pattern === 'cycle') {
+    const work = toNumber(b.cycleWork, 'Рабочих дней', { min: 1, max: 14, integer: true });
+    const off = toNumber(b.cycleOff, 'Выходных дней', { min: 1, max: 14, integer: true });
+    isWork = (key) => daysBetween(from, key) % (work + off) < work;
+  } else {
+    const set = new Set((Array.isArray(b.weekdays) ? b.weekdays : []).map(Number).filter((n) => n >= 0 && n <= 6));
+    if (!set.size) throw bad('Выберите хотя бы один день недели');
+    isWork = (key) => set.has(weekday(key));
+  }
+  const ownTimes = !b.startTime && !b.endTime;
+  const st = ownTimes ? null : toTime(b.startTime, 'Начало');
+  const et = ownTimes ? null : toTime(b.endTime, 'Конец');
+  const replace = Boolean(b.replace);
+  const today = localNow().date;
+  const result = { added: 0, updated: 0, removed: 0 };
+
+  tx(() => {
+    const ins = db.prepare(
+      `INSERT INTO workdays (user_id, date, start_time, end_time, hourly_rate, shift_rate, percent, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const upd = db.prepare('UPDATE workdays SET start_time = ?, end_time = ?, updated_at = ? WHERE id = ?');
+    const del = db.prepare('DELETE FROM workdays WHERE id = ?');
+    for (const u of users) {
+      const start = st ?? u.default_start;
+      const end = et ?? u.default_end;
+      const existing = new Map(
+        db
+          .prepare('SELECT * FROM workdays WHERE user_id = ? AND date >= ? AND date <= ?')
+          .all(u.id, from, to)
+          .map((d) => [d.date, d])
+      );
+      for (let key = from; key <= to; key = addDays(key, 1)) {
+        const ex = existing.get(key);
+        // Заменять можно только сегодняшние и будущие дни без прибыли и без отметки о невыходе.
+        const replaceable = replace && ex && key >= today && ex.status === 'work' && ex.profit === null;
+        if (isWork(key)) {
+          if (!ex) {
+            ins.run(u.id, key, start, end, u.hourly_rate, u.shift_rate, u.percent, req.user.id);
+            result.added++;
+          } else if (replaceable && (ex.start_time !== start || ex.end_time !== end)) {
+            upd.run(start, end, nowIso(), ex.id);
+            result.updated++;
+          }
+        } else if (replaceable) {
+          del.run(ex.id);
+          result.removed++;
+        }
+      }
+    }
+  });
+  res.json(result);
+});
+
+// Очистка графика: удаляются только сегодняшние и будущие дни без внесённой прибыли.
+admin.post('/schedule/clear', (req, res) => {
+  const b = req.body ?? {};
+  const ids = toIdList(b.userIds, 'сотрудников');
+  const { from, to } = readFillRange(b);
+  const today = localNow().date;
+  const start = from > today ? from : today;
+  let removed = 0;
+  tx(() => {
+    const del = db.prepare('DELETE FROM workdays WHERE user_id = ? AND date >= ? AND date <= ? AND profit IS NULL');
+    for (const id of ids) removed += del.run(id, start, to).changes;
+  });
+  res.json({ removed });
 });
 
 /* ---------- Бонусы и штрафы ---------- */
@@ -421,7 +647,7 @@ function readAdjustment(b, current) {
     kind,
     amount: b.amount !== undefined ? toCents(b.amount, 'Сумма', { min: 0.01, max: 1e8 }) : current.amount,
     reason: b.reason !== undefined ? toText(b.reason, 'Причина', { max: 300 }) : current.reason,
-    date: b.date !== undefined ? toIso(b.date, 'Дата') : current.date,
+    date: b.date !== undefined ? toDateKey(b.date, 'Дата') : current.date,
   };
 }
 
@@ -529,16 +755,33 @@ admin.delete('/notifications/:id', (req, res) => {
 
 /* ---------- Статистика и резервные копии ---------- */
 
+// Главный экран администратора: кто сегодня по графику, кто не вышел, где не внесена прибыль.
+admin.get('/today', (req, res) => {
+  const now = localNow();
+  const today = db
+    .prepare(`${DAY_SQL} WHERE w.date >= ? AND w.date <= ? ORDER BY w.start_time, u.name COLLATE NOCASE`)
+    .all(addDays(now.date, -1), now.date)
+    .map((d) => publicDay(d, now))
+    // Вчерашние смены показываем, только если ночная смена ещё идёт.
+    .filter((d) => d.date === now.date || d.state === 'active');
+  const missing = db
+    .prepare(`${DAY_SQL} WHERE w.date >= ? AND w.date <= ? AND w.status = 'work' AND w.profit IS NULL ORDER BY w.date DESC`)
+    .all(addDays(now.date, -30), now.date)
+    .map((d) => publicDay(d, now))
+    .filter((d) => d.state === 'needs_profit');
+  const absences = db
+    .prepare(`${DAY_SQL} WHERE w.status = 'absent' AND w.date >= ? AND w.date <= ? ORDER BY w.date DESC`)
+    .all(addDays(now.date, -7), addDays(now.date, 14))
+    .map((d) => publicDay(d, now));
+  res.json({ now, today, missing, absences });
+});
+
 admin.get('/stats', (req, res) => {
-  const stats = computeStats(parseRange(req.query), { withPay: true });
-  const onShift = db
-    .prepare(
-      `SELECT s.*, u.name AS user_name FROM shifts s JOIN users u ON u.id = s.user_id
-       WHERE s.end_at IS NULL ORDER BY s.start_at`
-    )
-    .all()
-    .map(publicShift);
-  res.json({ ...stats, onShift });
+  res.json(computeStats(parseRange(req.query), { withPay: true }));
+});
+
+admin.get('/analytics', (req, res) => {
+  res.json(computeAnalytics(parseRange(req.query)));
 });
 
 admin.get('/backup', (req, res) => {

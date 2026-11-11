@@ -1,5 +1,7 @@
-import { useApi, usePeriod, periodQuery, money, hours } from '../lib.js';
-import { BarChart, ErrorBox, Leaderboard, Loading, PeriodPicker, Stat } from '../components/ui.jsx';
+import { useApi, usePeriod, periodQuery, money, hours, todayKey } from '../lib.js';
+import { Empty, ErrorBox, Kpi, Loading, PageHead, PeriodPicker, Section } from '../components/ui.jsx';
+import { ColumnChart, Leaderboard } from '../components/charts.jsx';
+import { profitPoints } from './admin/Analytics.jsx';
 import { useAuth } from '../App.jsx';
 
 export function RatingPage() {
@@ -9,27 +11,37 @@ export function RatingPage() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Статистика</h1>
+      <PageHead title="Рейтинг" sub="Общая статистика команды и ваше место">
         <PeriodPicker value={period} onChange={setPeriod} />
-      </div>
+      </PageHead>
       <ErrorBox error={error} onRetry={reload} />
       {loading && !data ? (
         <Loading />
       ) : data ? (
         <>
-          <div className="stats">
-            <Stat label="Моё место" value={data.myPlace ? `${data.myPlace} из ${data.leaderboard.length}` : '—'} accent="primary" />
-            <Stat label="Общая прибыль" value={money(data.totals.profit)} />
-            <Stat label="Доходность" value={`${money(data.totals.profitPerHour)}/ч`} sub={`в среднем ${money(data.totals.avgProfit)} за смену`} />
-            <Stat label="Всего смен" value={data.totals.shifts} sub={hours(data.totals.hours)} />
+          <div className="kpis">
+            <Kpi
+              label="Моё место"
+              value={data.myPlace ? `${data.myPlace} из ${data.leaderboard.length}` : '—'}
+              tone="accent"
+              icon="award"
+            />
+            <Kpi label="Прибыль команды" value={money(data.totals.profit)} />
+            <Kpi label="Доходность" value={`${money(data.totals.profitPerHour)}/ч`} sub={`${money(data.totals.avgProfit)} за смену`} />
+            <Kpi label="Всего смен" value={data.totals.shifts} sub={hours(data.totals.hours)} />
           </div>
-          <h2 className="section-title">Прибыль по {data.series.mode === 'month' ? 'месяцам' : 'дням'}</h2>
-          <div className="card">
-            <BarChart series={data.series} />
-          </div>
-          <h2 className="section-title">Рейтинг сотрудников</h2>
-          <Leaderboard rows={data.leaderboard} meId={user.id} />
+          <Section title={`Прибыль по ${data.series.mode === 'month' ? 'месяцам' : 'дням'}`}>
+            <div className="card card-pad">
+              {data.series.points.some((p) => p.profit) ? (
+                <ColumnChart points={profitPoints(data.series)} highlight={todayKey()} label="Прибыль команды по дням" />
+              ) : (
+                <Empty icon="chart">За период прибыль ещё не внесена</Empty>
+              )}
+            </div>
+          </Section>
+          <Section title="Рейтинг сотрудников">
+            <Leaderboard rows={data.leaderboard} meId={user.id} />
+          </Section>
         </>
       ) : null}
     </div>

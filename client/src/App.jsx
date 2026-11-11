@@ -1,15 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { NavLink, Navigate, Route, Routes, Link } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from './lib.js';
-import { Icon, Loading } from './components/ui.jsx';
+import { Avatar, Icon, Loading } from './components/ui.jsx';
 import { Login } from './pages/Login.jsx';
-import { ShiftPage } from './pages/Shift.jsx';
+import { HomePage } from './pages/Home.jsx';
 import { EarningsPage } from './pages/Earnings.jsx';
 import { RatingPage } from './pages/Rating.jsx';
 import { NotificationsPage } from './pages/Notifications.jsx';
 import { ProfilePage } from './pages/Profile.jsx';
 import { AdminOverview } from './pages/admin/Overview.jsx';
-import { AdminShifts } from './pages/admin/Shifts.jsx';
+import { AdminSchedule } from './pages/admin/Schedule.jsx';
+import { AdminAnalytics } from './pages/admin/Analytics.jsx';
 import { AdminUsers } from './pages/admin/Users.jsx';
 import { AdminAdjustments } from './pages/admin/Adjustments.jsx';
 import { AdminNotify } from './pages/admin/Notify.jsx';
@@ -39,7 +40,7 @@ export function App() {
     setUser(null);
   };
 
-  if (user === undefined) return <Loading />;
+  if (user === undefined) return <div className="boot"><Loading /></div>;
   if (!user) return <Login onLogin={setUser} />;
 
   return (
@@ -60,11 +61,10 @@ function useNotifications(enabled) {
   useEffect(() => {
     refresh();
     const t = setInterval(refresh, 60000);
-    const onFocus = () => refresh();
-    window.addEventListener('focus', onFocus);
+    window.addEventListener('focus', refresh);
     return () => {
       clearInterval(t);
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('focus', refresh);
     };
   }, [refresh]);
   return { ...state, refresh };
@@ -73,7 +73,7 @@ function useNotifications(enabled) {
 function OperatorApp() {
   const notifications = useNotifications(true);
   const tabs = [
-    { to: '/', icon: 'clock', label: 'Смена', end: true },
+    { to: '/', icon: 'home', label: 'Главная', end: true },
     { to: '/earnings', icon: 'wallet', label: 'Заработок' },
     { to: '/rating', icon: 'award', label: 'Рейтинг' },
     { to: '/notifications', icon: 'bell', label: 'Сообщения', badge: notifications.unread },
@@ -82,7 +82,7 @@ function OperatorApp() {
     <UnreadCtx.Provider value={notifications}>
       <Layout tabs={tabs}>
         <Routes>
-          <Route path="/" element={<ShiftPage />} />
+          <Route path="/" element={<HomePage />} />
           <Route path="/earnings" element={<EarningsPage />} />
           <Route path="/rating" element={<RatingPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
@@ -97,16 +97,18 @@ function OperatorApp() {
 function AdminApp() {
   const tabs = [
     { to: '/', icon: 'grid', label: 'Обзор', end: true },
-    { to: '/shifts', icon: 'clock', label: 'Смены' },
+    { to: '/schedule', icon: 'calendar', label: 'График' },
+    { to: '/analytics', icon: 'chart', label: 'Аналитика' },
     { to: '/users', icon: 'users', label: 'Сотрудники' },
-    { to: '/adjustments', icon: 'gift', label: 'Бонусы' },
-    { to: '/notify', icon: 'send', label: 'Рассылка' },
+    { to: '/adjustments', icon: 'gift', label: 'Бонусы и штрафы', short: 'Бонусы', more: true },
+    { to: '/notify', icon: 'send', label: 'Рассылка', more: true },
   ];
   return (
     <Layout tabs={tabs}>
       <Routes>
         <Route path="/" element={<AdminOverview />} />
-        <Route path="/shifts" element={<AdminShifts />} />
+        <Route path="/schedule" element={<AdminSchedule />} />
+        <Route path="/analytics" element={<AdminAnalytics />} />
         <Route path="/users" element={<AdminUsers />} />
         <Route path="/adjustments" element={<AdminAdjustments />} />
         <Route path="/notify" element={<AdminNotify />} />
@@ -119,41 +121,94 @@ function AdminApp() {
 
 function Layout({ tabs, children }) {
   const { user } = useAuth();
+  const { pathname } = useLocation();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const main = tabs.filter((t) => !t.more);
+  const more = tabs.filter((t) => t.more);
+  const moreActive = more.some((t) => pathname.startsWith(t.to)) || pathname === '/profile';
+
+  useEffect(() => {
+    setMoreOpen(false);
+    window.scrollTo(0, 0);
+  }, [pathname]);
+
   return (
     <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <img src="/icon.svg" alt="" width="28" height="28" />
-          <span>Смены</span>
-        </div>
-        <nav className="sidenav" aria-label="Разделы">
+      <aside className="sidebar">
+        <Link to="/" className="brand">
+          <img src="/icon.svg" alt="" width="32" height="32" />
+          <span>
+            Смены
+            <small>{user.role === 'admin' ? 'администратор' : 'сотрудник'}</small>
+          </span>
+        </Link>
+        <nav className="side-nav" aria-label="Разделы">
           {tabs.map((t) => (
             <NavItem key={t.to} {...t} />
           ))}
         </nav>
-        <Link to="/profile" className="me" aria-label="Профиль">
-          <span className="me-name">{user.name}</span>
-          <span className="avatar">{user.name.trim()[0]?.toUpperCase() || '?'}</span>
+        <NavLink to="/profile" className={({ isActive }) => `side-me ${isActive ? 'active' : ''}`}>
+          <Avatar name={user.name} size="sm" />
+          <span className="side-me-text">
+            <b>{user.name}</b>
+            <small>{user.login}</small>
+          </span>
+        </NavLink>
+      </aside>
+
+      <header className="topbar">
+        <Link to="/" className="brand">
+          <img src="/icon.svg" alt="" width="28" height="28" />
+          <span>Смены</span>
+        </Link>
+        <Link to="/profile" className="topbar-me" aria-label="Профиль">
+          <Avatar name={user.name} size="sm" />
         </Link>
       </header>
+
       <main className="content">{children}</main>
+
       <nav className="tabbar" aria-label="Разделы">
-        {tabs.map((t) => (
+        {main.map((t) => (
           <NavItem key={t.to} {...t} />
         ))}
+        {more.length > 0 && (
+          <button className={`nav-item ${moreActive ? 'active' : ''}`} onClick={() => setMoreOpen(true)}>
+            <span className="nav-icon">
+              <Icon name="more" />
+            </span>
+            <span className="nav-label">Ещё</span>
+          </button>
+        )}
       </nav>
+
+      {moreOpen && (
+        <div className="sheet-backdrop" onClick={() => setMoreOpen(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-grab" aria-hidden="true" />
+            {[...more, { to: '/profile', icon: 'user', label: 'Профиль' }].map((t) => (
+              <NavLink key={t.to} to={t.to} className={({ isActive }) => `sheet-item ${isActive ? 'active' : ''}`}>
+                <Icon name={t.icon} />
+                {t.label}
+                <Icon name="right" size={18} />
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function NavItem({ to, icon, label, end, badge }) {
+function NavItem({ to, icon, label, short, end, badge }) {
   return (
     <NavLink to={to} end={end} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
       <span className="nav-icon">
         <Icon name={icon} />
         {badge > 0 && <span className="badge">{badge > 99 ? '99+' : badge}</span>}
       </span>
-      <span className="nav-label">{label}</span>
+      <span className="nav-label">{short ?? label}</span>
+      <span className="nav-label-full">{label}</span>
     </NavLink>
   );
 }

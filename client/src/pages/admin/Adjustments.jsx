@@ -1,6 +1,21 @@
 import { useState } from 'react';
-import { api, useApi, usePeriod, periodQuery, money, date, todayKey } from '../../lib.js';
-import { ErrorBox, Empty, Field, Icon, Loading, Modal, MoneyInput, PeriodPicker, useToast } from '../../components/ui.jsx';
+import { api, useApi, usePeriod, periodQuery, money, dayShort, todayKey } from '../../lib.js';
+import {
+  Avatar,
+  Confirm,
+  Empty,
+  ErrorBox,
+  Field,
+  Icon,
+  Kpi,
+  Loading,
+  Modal,
+  MoneyInput,
+  PageHead,
+  PeriodPicker,
+  Segmented,
+  useToast,
+} from '../../components/ui.jsx';
 
 export function AdminAdjustments() {
   const [period, setPeriod] = usePeriod('admin-adjustments');
@@ -15,55 +30,58 @@ export function AdminAdjustments() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Бонусы и штрафы</h1>
+      <PageHead title="Бонусы и штрафы" sub="Сотрудник получает уведомление о начислении">
         <PeriodPicker value={period} onChange={setPeriod} />
-      </div>
+        <button className="btn btn-primary" onClick={() => setEditing({})}>
+          <Icon name="plus" size={18} /> Добавить
+        </button>
+      </PageHead>
       <div className="filters">
-        <select value={userId} onChange={(e) => setUserId(e.target.value)} aria-label="Сотрудник">
-          <option value="">Все сотрудники</option>
-          {operators.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.name}
-            </option>
-          ))}
-        </select>
+        <div className="select-wrap">
+          <Icon name="user" size={16} />
+          <select value={userId} onChange={(e) => setUserId(e.target.value)} aria-label="Сотрудник">
+            <option value="">Все сотрудники</option>
+            {operators.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
       <ErrorBox error={list.error} onRetry={list.reload} />
-      {rows.length > 0 && (
-        <div className="summary-line">
-          Бонусы <b className="pos">+{money(bonuses)}</b> · штрафы <b className="neg">−{money(fines)}</b>
-        </div>
-      )}
+      <div className="kpis kpis-2">
+        <Kpi label="Бонусы" value={`+${money(bonuses)}`} icon="gift" tone="good" />
+        <Kpi label="Штрафы" value={`−${money(fines)}`} icon="alert" tone="bad" />
+      </div>
       {list.loading && !list.data ? (
         <Loading />
       ) : rows.length === 0 ? (
-        <Empty>За период записей нет</Empty>
+        <Empty icon="gift">За период записей нет</Empty>
       ) : (
-        <ul className="list">
+        <ul className="list card">
           {rows.map((a) => (
             <li key={a.id}>
               <button className="list-row list-btn" onClick={() => setEditing(a)}>
-                <div>
+                <Avatar name={a.userName} size="sm" />
+                <div className="list-main">
                   <div className="list-title">{a.userName}</div>
-                  <div className="muted small">
-                    {date(a.date)} · {a.kind === 'bonus' ? 'бонус' : 'штраф'}
+                  <div className="list-sub">
+                    {dayShort(a.date)} · {a.kind === 'bonus' ? 'бонус' : 'штраф'}
                     {a.reason && ` · ${a.reason}`}
                   </div>
                 </div>
                 <div className={`list-right ${a.kind === 'bonus' ? 'pos' : 'neg'}`}>
-                  {a.kind === 'bonus' ? '+' : '−'}
-                  {money(a.amount)}
+                  <b>
+                    {a.kind === 'bonus' ? '+' : '−'}
+                    {money(a.amount)}
+                  </b>
                 </div>
               </button>
             </li>
           ))}
         </ul>
       )}
-
-      <button className="fab" onClick={() => setEditing({})} aria-label="Добавить бонус или штраф">
-        <Icon name="plus" size={26} />
-      </button>
 
       {editing && (
         <AdjustmentModal
@@ -88,21 +106,20 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
     kind: item.kind ?? 'bonus',
     amount: item.amount ?? '',
     reason: item.reason ?? '',
-    date: item.date ? new Date(item.date).toLocaleDateString('sv-SE') : todayKey(),
+    date: item.date ?? todayKey(),
     notify: true,
   });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
     setError('');
-    // Дата хранится как полдень выбранного дня по местному времени.
-    const body = { ...f, date: new Date(`${f.date}T12:00`).toISOString() };
     try {
-      await api(isNew ? '/admin/adjustments' : `/admin/adjustments/${item.id}`, { method: isNew ? 'POST' : 'PUT', body });
+      await api(isNew ? '/admin/adjustments' : `/admin/adjustments/${item.id}`, { method: isNew ? 'POST' : 'PUT', body: f });
       toast('Сохранено');
       onSaved();
     } catch (err) {
@@ -112,29 +129,31 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
   };
 
   const remove = async () => {
-    if (!confirm('Удалить запись?')) return;
+    setBusy(true);
     try {
       await api(`/admin/adjustments/${item.id}`, { method: 'DELETE' });
       toast('Запись удалена');
       onSaved();
     } catch (err) {
+      setConfirm(false);
       setError(err.message);
+      setBusy(false);
     }
   };
 
   return (
     <Modal title={isNew ? 'Бонус или штраф' : `${item.kind === 'bonus' ? 'Бонус' : 'Штраф'}: ${item.userName}`} onClose={onClose}>
       <form className="form" onSubmit={submit}>
-        <div className="segmented">
-          <button type="button" className={f.kind === 'bonus' ? 'seg-on seg-good' : ''} onClick={() => setF({ ...f, kind: 'bonus' })}>
-            Бонус
-          </button>
-          <button type="button" className={f.kind === 'fine' ? 'seg-on seg-bad' : ''} onClick={() => setF({ ...f, kind: 'fine' })}>
-            Штраф
-          </button>
-        </div>
+        <Segmented
+          value={f.kind}
+          onChange={(kind) => setF({ ...f, kind })}
+          options={[
+            { value: 'bonus', label: 'Бонус', icon: 'gift', tone: 'good' },
+            { value: 'fine', label: 'Штраф', icon: 'alert', tone: 'bad' },
+          ]}
+        />
         {isNew && (
-          <Field label="Сотрудник *">
+          <Field label="Сотрудник">
             <select value={f.userId} onChange={set('userId')} required>
               <option value="">— выберите —</option>
               {operators.map((u) => (
@@ -146,10 +165,10 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
           </Field>
         )}
         <div className="row2">
-          <Field label="Сумма, сом *">
+          <Field label="Сумма, сом">
             <MoneyInput value={f.amount} onChange={set('amount')} required />
           </Field>
-          <Field label="Дата *">
+          <Field label="Дата">
             <input type="date" value={f.date} onChange={set('date')} required />
           </Field>
         </div>
@@ -159,13 +178,13 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
         {isNew && (
           <label className="check">
             <input type="checkbox" checked={f.notify} onChange={set('notify')} />
-            Отправить сотруднику уведомление
+            <span>Отправить сотруднику уведомление</span>
           </label>
         )}
         {error && <div className="alert alert-error">{error}</div>}
         <div className="form-actions">
           {!isNew && (
-            <button type="button" className="btn btn-ghost btn-danger-text" onClick={remove}>
+            <button type="button" className="btn btn-ghost btn-danger-text" onClick={() => setConfirm(true)}>
               Удалить
             </button>
           )}
@@ -174,6 +193,7 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
           </button>
         </div>
       </form>
+      {confirm && <Confirm title="Удалить запись?" text="Сумма перестанет учитываться в зарплате." busy={busy} onConfirm={remove} onClose={() => setConfirm(false)} />}
     </Modal>
   );
 }

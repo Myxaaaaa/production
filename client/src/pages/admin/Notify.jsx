@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { api, useApi, dateTime, date } from '../../lib.js';
-import { ErrorBox, Empty, Field, useToast } from '../../components/ui.jsx';
+import { api, useApi, dateTime, dayMonth, addDays, todayKey } from '../../lib.js';
+import { Confirm, Empty, ErrorBox, Field, Icon, PageHead, Section, Segmented, useToast } from '../../components/ui.jsx';
 
 const EMPTY = { kind: 'info', title: '', body: '', paydayDate: '', targetUserId: '' };
 
@@ -11,19 +11,19 @@ export function AdminNotify() {
   const [f, setF] = useState(EMPTY);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(null);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
-  const paydayTemplate = () => {
-    const d = new Date();
-    d.setDate(d.getDate() + 3);
-    const iso = d.toLocaleDateString('sv-SE');
-    setF({
-      ...f,
-      kind: 'payday',
-      paydayDate: f.paydayDate || iso,
-      title: 'Скоро день выдачи зарплаты',
-      body: f.body || 'Пожалуйста, проверьте, что все смены закрыты и прибыль внесена.',
-    });
+  const setKind = (kind) => {
+    if (kind === 'payday') {
+      setF({
+        ...f,
+        kind,
+        paydayDate: f.paydayDate || addDays(todayKey(), 3),
+        title: f.title || 'Скоро день выдачи зарплаты',
+        body: f.body || 'Пожалуйста, проверьте, что прибыль за все смены внесена.',
+      });
+    } else setF({ ...f, kind });
   };
 
   const submit = async (e) => {
@@ -42,10 +42,10 @@ export function AdminNotify() {
     }
   };
 
-  const remove = async (n) => {
-    if (!confirm(`Удалить уведомление «${n.title}»? Сотрудники его больше не увидят.`)) return;
+  const remove = async () => {
     try {
-      await api(`/admin/notifications/${n.id}`, { method: 'DELETE' });
+      await api(`/admin/notifications/${removing.id}`, { method: 'DELETE' });
+      setRemoving(null);
       sent.reload();
     } catch (err) {
       toast(err.message, 'error');
@@ -53,14 +53,17 @@ export function AdminNotify() {
   };
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Рассылка</h1>
-        <button className="btn btn-ghost btn-sm" onClick={paydayTemplate}>
-          Шаблон «день зарплаты»
-        </button>
-      </div>
-      <form className="card form" onSubmit={submit}>
+    <div className="page narrow">
+      <PageHead title="Рассылка" sub="Сообщения появятся у сотрудников в разделе «Сообщения»" />
+      <form className="card card-pad form" onSubmit={submit}>
+        <Segmented
+          value={f.kind}
+          onChange={setKind}
+          options={[
+            { value: 'info', label: 'Сообщение', icon: 'bell' },
+            { value: 'payday', label: 'День зарплаты', icon: 'wallet' },
+          ]}
+        />
         <div className="row2">
           <Field label="Кому">
             <select value={f.targetUserId} onChange={set('targetUserId')}>
@@ -74,52 +77,60 @@ export function AdminNotify() {
                 ))}
             </select>
           </Field>
-          <Field label="Тип">
-            <select value={f.kind} onChange={set('kind')}>
-              <option value="info">Обычное сообщение</option>
-              <option value="payday">День выдачи зарплаты</option>
-            </select>
-          </Field>
+          {f.kind === 'payday' && (
+            <Field label="Дата выдачи зарплаты" hint="Напоминание будет на главном экране до этой даты">
+              <input type="date" value={f.paydayDate} onChange={set('paydayDate')} required />
+            </Field>
+          )}
         </div>
-        {f.kind === 'payday' && (
-          <Field label="Дата выдачи зарплаты *" hint="Сотрудники увидят напоминание на главном экране до этой даты">
-            <input type="date" value={f.paydayDate} onChange={set('paydayDate')} required />
-          </Field>
-        )}
-        <Field label="Заголовок *">
+        <Field label="Заголовок">
           <input value={f.title} onChange={set('title')} required maxLength={120} />
         </Field>
         <Field label="Текст">
           <textarea value={f.body} onChange={set('body')} rows={3} maxLength={2000} />
         </Field>
         {error && <div className="alert alert-error">{error}</div>}
-        <button className="btn btn-primary" disabled={busy}>
-          Отправить
-        </button>
+        <div className="form-actions">
+          <button className="btn btn-primary" disabled={busy}>
+            <Icon name="send" size={18} /> Отправить
+          </button>
+        </div>
       </form>
 
-      <h2 className="section-title">Отправленные</h2>
-      <ErrorBox error={sent.error} onRetry={sent.reload} />
-      {sent.data?.length === 0 ? (
-        <Empty>Пока ничего не отправлено</Empty>
-      ) : (
-        <ul className="list">
-          {(sent.data || []).map((n) => (
-            <li key={n.id} className="list-row">
-              <div>
-                <div className="list-title">{n.title}</div>
-                {n.paydayDate && <div className="small">Выдача: {date(`${n.paydayDate}T00:00`)}</div>}
-                {n.body && <div className="muted small clamp">{n.body}</div>}
-                <div className="muted small">
-                  {n.targetName ? `→ ${n.targetName}` : '→ всем'} · {dateTime(n.createdAt)} · прочитали {n.reads} из {n.recipients}
+      <Section title="Отправленные">
+        <ErrorBox error={sent.error} onRetry={sent.reload} />
+        {sent.data?.length === 0 ? (
+          <Empty icon="send">Пока ничего не отправлено</Empty>
+        ) : (
+          <ul className="list card">
+            {(sent.data || []).map((n) => (
+              <li key={n.id} className="list-row">
+                <span className={`list-icon ${n.kind === 'payday' ? 'tone-accent' : ''}`}>
+                  <Icon name={n.kind === 'payday' ? 'wallet' : n.kind === 'bonus' ? 'gift' : n.kind === 'fine' ? 'alert' : 'bell'} size={18} />
+                </span>
+                <div className="list-main">
+                  <div className="list-title">{n.title}</div>
+                  {n.paydayDate && <div className="list-sub">Выдача: {dayMonth(n.paydayDate)}</div>}
+                  {n.body && <div className="list-sub clamp">{n.body}</div>}
+                  <div className="list-sub">
+                    {n.targetName ? `→ ${n.targetName}` : '→ всем'} · {dateTime(n.createdAt)} · прочитали {n.reads} из {n.recipients}
+                  </div>
                 </div>
-              </div>
-              <button className="btn btn-ghost btn-sm btn-danger-text" onClick={() => remove(n)}>
-                Удалить
-              </button>
-            </li>
-          ))}
-        </ul>
+                <button className="icon-btn" onClick={() => setRemoving(n)} aria-label="Удалить">
+                  <Icon name="x" size={18} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+      {removing && (
+        <Confirm
+          title="Удалить уведомление?"
+          text={`«${removing.title}» исчезнет у сотрудников.`}
+          onConfirm={remove}
+          onClose={() => setRemoving(null)}
+        />
       )}
     </div>
   );

@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'react';
-import { api, dateTime, date } from '../lib.js';
-import { Empty, Icon } from '../components/ui.jsx';
+import { api, dateTime, dayMonth } from '../lib.js';
+import { Empty, Icon, PageHead } from '../components/ui.jsx';
 import { useUnread } from '../App.jsx';
 
 const KIND = {
-  info: { icon: 'bell', label: 'Сообщение' },
-  payday: { icon: 'calendar', label: 'Зарплата' },
-  bonus: { icon: 'gift', label: 'Бонус' },
-  fine: { icon: 'x', label: 'Штраф' },
+  info: { icon: 'bell', label: 'Сообщение', tone: '' },
+  payday: { icon: 'wallet', label: 'Зарплата', tone: 'tone-accent' },
+  bonus: { icon: 'gift', label: 'Бонус', tone: 'tone-good' },
+  fine: { icon: 'alert', label: 'Штраф', tone: 'tone-bad' },
 };
 
 export function NotificationsPage() {
@@ -23,29 +23,30 @@ export function NotificationsPage() {
   }, [unread, refresh]);
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Сообщения</h1>
-      </div>
+    <div className="page narrow">
+      <PageHead title="Сообщения" sub={unread ? `Новых: ${unread}` : 'Все сообщения прочитаны'} />
       {items.length === 0 ? (
-        <Empty>Сообщений пока нет</Empty>
+        <Empty icon="bell">Сообщений пока нет</Empty>
       ) : (
-        <ul className="list notes">
-          {items.map((n) => (
-            <li key={n.id} className={`note note-${n.kind} ${n.read ? '' : 'note-new'}`}>
-              <span className="note-icon">
-                <Icon name={KIND[n.kind]?.icon || 'bell'} size={20} />
-              </span>
-              <div className="note-main">
-                <div className="note-title">{n.title}</div>
-                {n.paydayDate && <div className="note-date">Дата выдачи: {date(`${n.paydayDate}T00:00`)}</div>}
-                {n.body && <div className="note-body">{n.body}</div>}
-                <div className="muted small">
-                  {KIND[n.kind]?.label} · {dateTime(n.createdAt)}
+        <ul className="list card">
+          {items.map((n) => {
+            const k = KIND[n.kind] ?? KIND.info;
+            return (
+              <li key={n.id} className={`list-row note ${n.read ? '' : 'note-new'}`}>
+                <span className={`list-icon ${k.tone}`}>
+                  <Icon name={k.icon} size={18} />
+                </span>
+                <div className="list-main">
+                  <div className="list-title">{n.title}</div>
+                  {n.paydayDate && <div className="note-date">Дата выдачи: {dayMonth(n.paydayDate)}</div>}
+                  {n.body && <div className="note-body">{n.body}</div>}
+                  <div className="list-sub">
+                    {k.label} · {dateTime(n.createdAt)}
+                  </div>
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

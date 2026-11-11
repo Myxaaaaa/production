@@ -47,7 +47,20 @@ function loadSessionSecret() {
   return s;
 }
 
+// Часовой пояс бизнеса: по нему определяется «сегодня» и время начала/конца смен.
+function loadTimezone() {
+  const tz = (env.APP_TIMEZONE || 'Asia/Bishkek').trim();
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return tz;
+  } catch {
+    console.warn(`[WARN] Неизвестный APP_TIMEZONE="${tz}" — использую Asia/Bishkek.`);
+    return 'Asia/Bishkek';
+  }
+}
+
 export const config = {
+  timezone: loadTimezone(),
   isProd,
   onRailway,
   port: Number(env.PORT) || 3000,
