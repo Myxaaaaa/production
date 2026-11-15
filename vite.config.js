@@ -8,6 +8,8 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
-    proxy: { '/api': `http://localhost:${process.env.PORT || 3000}` },
+    // changeOrigin: false — сохраняем исходный Host, иначе CSRF-проверка в server/api.js
+    // видит Origin localhost:5173 и Host localhost:3000 и отклоняет вход.
+    proxy: { '/api': { target: `http://localhost:${process.env.PORT || 3000}`, changeOrigin: false } },
   },
 });

@@ -1,80 +1,126 @@
-import { useEffect, useState } from 'react';
-import { useApi, usePeriod, periodQuery, money, hours, duration, time } from '../../lib.js';
-import { BarChart, ErrorBox, Icon, Leaderboard, Loading, PeriodPicker, Stat, Empty } from '../../components/ui.jsx';
-
-function Since({ iso }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30000);
-    return () => clearInterval(t);
-  }, []);
-  return <span>{duration(now - Date.parse(iso)).slice(0, 5)}</span>;
-}
+import { Link } from 'react-router-dom';
+import { useApi, periodQuery, money, minutes, dayLabel, todayKey, ago, time } from '../../lib.js';
+import { Avatar, Empty, ErrorBox, Icon, Kpi, Loading, PageHead, Progress, Section } from '../../components/ui.jsx';
+import { BarChart, CurveChart, HourBars } from '../../components/charts.jsx';
+import { WindowCard } from '../../components/insights.jsx';
+import { KpdRating } from '../../components/rating.jsx';
 
 export function AdminOverview() {
-  const [period, setPeriod] = usePeriod('admin-overview');
-  const { data, error, loading, reload } = useApi(`/admin/stats?${periodQuery(period)}`);
+  const live = useApi('/admin/live', { refreshMs: 15000 });
+  const month = useApi(`/admin/analytics?${periodQuery({ key: 'month' })}`, { refreshMs: 60000 });
+  const rating = useApi(`/admin/rating?${periodQuery({ key: 'month' })}`, { refreshMs: 120000 });
+  const L = live.data;
+  const A = month.data;
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Обзор</h1>
-        <PeriodPicker value={period} onChange={setPeriod} />
-      </div>
-      <ErrorBox error={error} onRetry={reload} />
-      {loading && !data ? (
+      <PageHead title="Обзор" subtitle={dayLabel(todayKey(), { weekday: 'long', day: 'numeric', month: 'long' })}>
+        <Link to="/profit" className="btn btn-ghost">
+          <Icon name="list" size={17} /> Все поступления
+        </Link>
+      </PageHead>
+      <ErrorBox error={live.error || month.error} onRetry={() => (live.reload(), month.reload())} />
+      {!L || !A ? (
         <Loading />
-      ) : data ? (
+      ) : (
         <>
-          <div className="stats">
-            <Stat label="Прибыль" value={money(data.totals.profit)} accent="primary" />
-            <Stat label="Фонд зарплаты" value={money(data.totals.total)} sub="с бонусами и штрафами" />
-            <Stat label="Доходность" value={`${money(data.totals.profitPerHour)}/ч`} sub={`${money(data.totals.avgProfit)} за смену`} />
-            <Stat label="Смен" value={data.totals.shifts} sub={hours(data.totals.hours)} />
-            <Stat label="Бонусы" value={money(data.totals.bonuses)} accent="good" />
-            <Stat label="Штрафы" value={money(data.totals.fines)} accent="bad" />
+          <div className="kpis">
+            <Kpi
+              label="Прибыль сегодня"
+              icon="drop"
+              tone="accent"
+              value={money(L.team.profit)}
+              sub={
+                L.team.goal > 0 ? (
+                  <>
+                    <Progress value={L.team.profit} max={L.team.goal} />
+                    <span>цель {money(L.team.goal)}</span>
+                  </>
+                ) : (
+                  'цель команды не задана'
+                )
+              }
+            />
+            <Kpi label="Начислено сегодня" icon="coins" value={money(L.team.earned)} sub="оклады + проценты" />
+            <Kpi label="Сейчас работают" icon="zap" value={`${L.team.online} из ${L.rows.length}`} sub="открыта рабочая страница" />
+            <Kpi
+              label="Прибыль за месяц"
+              icon="calendar"
+              value={money(A.totals.profit)}
+              sub={A.forecast ? `прогноз до конца месяца ${money(A.forecast.profit)}` : `${money(A.totals.perDay)} в день`}
+            />
           </div>
 
-          <h2 className="section-title">Сейчас на смене ({data.onShift.length})</h2>
-          {data.onShift.length === 0 ? (
-            <Empty>Никто не на смене</Empty>
-          ) : (
-            <ul className="list">
-              {data.onShift.map((s) => (
-                <li key={s.id} className="list-row">
-                  <div>
-                    <div className="list-title">
-                      <span className="dot" /> {s.userName}
-                    </div>
-                    <div className="muted small">с {time(s.startAt)}</div>
-                  </div>
-                  <div className="list-right">
-                    <Since iso={s.startAt} />
-                  </div>
-                </li>
-              ))}
-            </ul>
+          <div className="two-col wide-left">
+            <Section title="Сотрудники сейчас" aside={<span className="muted small">обновляется само</span>}>
+              {L.rows.length === 0 ? (
+                <Empty icon="users">
+                  Сотрудников пока нет. <Link to="/users">Добавить</Link>
+                </Empty>
+              ) : (
+                <ul className="card live">
+                  {L.rows.map((r) => (
+                    <li key={r.userId} className={r.idleAlert ? 'idle' : ''}>
+                      <Avatar name={r.name} online={r.online} />
+                      <div className="live-main">
+                        <b>{r.name}</b>
+                        <div className="muted small">
+                          {r.online ? (
+                            r.idleAlert ? (
+                              <span className="warn-text">нет прибыли уже {minutes(r.idleMinutes)}</span>
+                            ) : (
+                              <>онлайн{r.page && ` · ${r.page}`}</>
+                            )
+                          ) : r.lastSeen ? (
+                            `не в сети · был ${ago(r.lastSeen)}`
+                          ) : (
+                            'расширение не подключено'
+                          )}
+                          {r.lastEventAt && ` · последнее поступление ${time(r.lastEventAt)}`}
+                        </div>
+                        {r.goal > 0 && <Progress value={r.profit} max={r.goal} />}
+                      </div>
+                      <div className="live-num">
+                        <b>{money(r.profit)}</b>
+                        <span className="muted small">заработал {money(r.earned)}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+            <div className="stack">
+              <WindowCard window={A.window} windowHours={A.windowHours} compact />
+              <div className="card">
+                <div className="card-title">По часам, месяц</div>
+                <HourBars byHour={A.byHour} window={A.window} height={120} />
+              </div>
+            </div>
+          </div>
+
+          {rating.data && rating.data.rows.some((r) => r.profit > 0) && (
+            <Section title="🏆 Топ по КПД за месяц" aside={<Link to="/rating" className="small">Весь рейтинг →</Link>}>
+              <div className="card">
+                <KpdRating data={rating.data} compact />
+              </div>
+            </Section>
           )}
 
-          <h2 className="section-title">Прибыль по {data.series.mode === 'month' ? 'месяцам' : 'дням'}</h2>
-          <div className="card">
-            <BarChart series={data.series} />
-          </div>
+          {A.curve && (
+            <Section title="Сегодня против обычного дня">
+              <div className="card">
+                <CurveChart curve={A.curve} />
+              </div>
+            </Section>
+          )}
 
-          <h2 className="section-title">Рейтинг и зарплаты</h2>
-          <Leaderboard rows={data.leaderboard} withPay />
-
-          <h2 className="section-title">Резервная копия</h2>
-          <div className="card">
-            <p className="muted">
-              База автоматически копируется на Volume каждые сутки. Можно также скачать актуальную копию к себе.
-            </p>
-            <a className="btn btn-ghost" href="/api/admin/backup" download>
-              <Icon name="download" size={18} /> Скачать копию базы
-            </a>
-          </div>
+          <Section title="Прибыль по дням" aside={<Link to="/analytics" className="small">Подробная аналитика →</Link>}>
+            <div className="card">
+              <BarChart series={A.series} />
+            </div>
+          </Section>
         </>
-      ) : null}
+      )}
     </div>
   );
 }

@@ -1,18 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, Link } from 'react-router-dom';
-import { api } from './lib.js';
-import { Icon, Loading } from './components/ui.jsx';
+import { api, useApi } from './lib.js';
+import { Avatar, Icon, Loading } from './components/ui.jsx';
 import { Login } from './pages/Login.jsx';
-import { ShiftPage } from './pages/Shift.jsx';
+import { HomePage } from './pages/Home.jsx';
 import { EarningsPage } from './pages/Earnings.jsx';
-import { RatingPage } from './pages/Rating.jsx';
+import { StatsPage } from './pages/Stats.jsx';
 import { NotificationsPage } from './pages/Notifications.jsx';
 import { ProfilePage } from './pages/Profile.jsx';
 import { AdminOverview } from './pages/admin/Overview.jsx';
-import { AdminShifts } from './pages/admin/Shifts.jsx';
+import { AdminAnalytics } from './pages/admin/Analytics.jsx';
+import { AdminProfit } from './pages/admin/Profit.jsx';
+import { AdminPayroll } from './pages/admin/Payroll.jsx';
 import { AdminUsers } from './pages/admin/Users.jsx';
-import { AdminAdjustments } from './pages/admin/Adjustments.jsx';
 import { AdminNotify } from './pages/admin/Notify.jsx';
+import { MorePage } from './pages/admin/More.jsx';
+import { AdminRating } from './pages/admin/Rating.jsx';
+import { AdvancesPage } from './pages/Advances.jsx';
 
 const AuthCtx = createContext(null);
 export const useAuth = () => useContext(AuthCtx);
@@ -39,7 +43,7 @@ export function App() {
     setUser(null);
   };
 
-  if (user === undefined) return <Loading />;
+  if (user === undefined) return <div className="boot"><Loading /></div>;
   if (!user) return <Login onLogin={setUser} />;
 
   return (
@@ -49,42 +53,42 @@ export function App() {
   );
 }
 
-function useNotifications(enabled) {
+function useNotifications() {
   const [state, setState] = useState({ unread: 0, items: [] });
   const refresh = useCallback(() => {
-    if (!enabled) return;
     api('/notifications')
       .then(setState)
       .catch(() => {});
-  }, [enabled]);
+  }, []);
   useEffect(() => {
     refresh();
     const t = setInterval(refresh, 60000);
-    const onFocus = () => refresh();
-    window.addEventListener('focus', onFocus);
+    window.addEventListener('focus', refresh);
     return () => {
       clearInterval(t);
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('focus', refresh);
     };
   }, [refresh]);
   return { ...state, refresh };
 }
 
 function OperatorApp() {
-  const notifications = useNotifications(true);
+  const notifications = useNotifications();
   const tabs = [
-    { to: '/', icon: 'clock', label: 'Смена', end: true },
+    { to: '/', icon: 'home', label: 'Главная', end: true },
     { to: '/earnings', icon: 'wallet', label: 'Заработок' },
-    { to: '/rating', icon: 'award', label: 'Рейтинг' },
+    { to: '/stats', icon: 'chart', label: 'Аналитика' },
+    { to: '/advances', icon: 'coins', label: 'Аванс' },
     { to: '/notifications', icon: 'bell', label: 'Сообщения', badge: notifications.unread },
   ];
   return (
     <UnreadCtx.Provider value={notifications}>
-      <Layout tabs={tabs}>
+      <Layout tabs={tabs} mobileTabs={tabs}>
         <Routes>
-          <Route path="/" element={<ShiftPage />} />
+          <Route path="/" element={<HomePage />} />
           <Route path="/earnings" element={<EarningsPage />} />
-          <Route path="/rating" element={<RatingPage />} />
+          <Route path="/stats" element={<StatsPage />} />
+          <Route path="/advances" element={<AdvancesPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -94,22 +98,38 @@ function OperatorApp() {
   );
 }
 
+const ADMIN_TABS = [
+  { to: '/', icon: 'grid', label: 'Обзор', end: true },
+  { to: '/analytics', icon: 'chart', label: 'Аналитика' },
+  { to: '/payroll', icon: 'wallet', label: 'Зарплата' },
+  { to: '/rating', icon: 'trophy', label: 'Рейтинг' },
+  { to: '/profit', icon: 'drop', label: 'Поступления' },
+  { to: '/users', icon: 'users', label: 'Сотрудники' },
+  { to: '/notify', icon: 'send', label: 'Рассылка' },
+];
+
 function AdminApp() {
-  const tabs = [
-    { to: '/', icon: 'grid', label: 'Обзор', end: true },
-    { to: '/shifts', icon: 'clock', label: 'Смены' },
-    { to: '/users', icon: 'users', label: 'Сотрудники' },
-    { to: '/adjustments', icon: 'gift', label: 'Бонусы' },
-    { to: '/notify', icon: 'send', label: 'Рассылка' },
-  ];
+  // Счётчик новых заявок на аванс — на вкладке «Зарплата».
+  const adv = useApi('/admin/advances/pending', { refreshMs: 30000 });
+  const pending = adv.data?.pending || 0;
+  useEffect(() => {
+    const on = () => adv.reload();
+    window.addEventListener('advances:changed', on);
+    return () => window.removeEventListener('advances:changed', on);
+  });
+  const tabs = ADMIN_TABS.map((t) => (t.to === '/payroll' ? { ...t, badge: pending } : t));
+  const mobile = [...tabs.slice(0, 4), { to: '/more', icon: 'more', label: 'Ещё' }];
   return (
-    <Layout tabs={tabs}>
+    <Layout tabs={tabs} mobileTabs={mobile}>
       <Routes>
         <Route path="/" element={<AdminOverview />} />
-        <Route path="/shifts" element={<AdminShifts />} />
+        <Route path="/analytics" element={<AdminAnalytics />} />
+        <Route path="/profit" element={<AdminProfit />} />
+        <Route path="/payroll" element={<AdminPayroll />} />
+        <Route path="/rating" element={<AdminRating />} />
         <Route path="/users" element={<AdminUsers />} />
-        <Route path="/adjustments" element={<AdminAdjustments />} />
         <Route path="/notify" element={<AdminNotify />} />
+        <Route path="/more" element={<MorePage tabs={ADMIN_TABS.slice(4)} />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -117,28 +137,44 @@ function AdminApp() {
   );
 }
 
-function Layout({ tabs, children }) {
+function Brand() {
+  return (
+    <Link to="/" className="brand">
+      <img src="/icon.svg" alt="" width="30" height="30" />
+      <span>Смены</span>
+    </Link>
+  );
+}
+
+function Layout({ tabs, mobileTabs, children }) {
   const { user } = useAuth();
   return (
     <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <img src="/icon.svg" alt="" width="28" height="28" />
-          <span>Смены</span>
-        </div>
-        <nav className="sidenav" aria-label="Разделы">
+      <aside className="sidebar">
+        <Brand />
+        <nav className="side-nav" aria-label="Разделы">
           {tabs.map((t) => (
             <NavItem key={t.to} {...t} />
           ))}
         </nav>
-        <Link to="/profile" className="me" aria-label="Профиль">
-          <span className="me-name">{user.name}</span>
-          <span className="avatar">{user.name.trim()[0]?.toUpperCase() || '?'}</span>
+        <Link to="/profile" className="side-me">
+          <Avatar name={user.name} size="sm" />
+          <div>
+            <b>{user.name}</b>
+            <span>{user.role === 'admin' ? 'Администратор' : 'Сотрудник'}</span>
+          </div>
+          <Icon name="settings" size={17} />
+        </Link>
+      </aside>
+      <header className="topbar">
+        <Brand />
+        <Link to="/profile" aria-label="Профиль">
+          <Avatar name={user.name} size="sm" />
         </Link>
       </header>
       <main className="content">{children}</main>
       <nav className="tabbar" aria-label="Разделы">
-        {tabs.map((t) => (
+        {mobileTabs.map((t) => (
           <NavItem key={t.to} {...t} />
         ))}
       </nav>

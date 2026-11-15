@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(`/api${path}`, {
@@ -16,39 +16,70 @@ export async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-export function useApi(path) {
+// Загрузка данных; refreshMs — тихое автообновление (без мигания «Загрузка…»).
+export function useApi(path, { refreshMs = 0 } = {}) {
   const [state, setState] = useState({ data: null, error: null, loading: true });
-  const load = useCallback(() => {
-    if (!path) return;
-    setState((s) => ({ ...s, loading: true }));
-    api(path)
-      .then((data) => setState({ data, error: null, loading: false }))
-      .catch((e) => setState((s) => ({ ...s, error: e.message, loading: false })));
-  }, [path]);
-  useEffect(load, [load]);
-  return { ...state, reload: load };
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const load = useCallback(
+    (silent = false) => {
+      if (!path) return;
+      if (!silent) setState((s) => ({ ...s, loading: true }));
+      api(path)
+        .then((data) => pathRef.current === path && setState({ data, error: null, loading: false }))
+        .catch((e) => setState((s) => ({ ...s, error: e.message, loading: false })));
+    },
+    [path]
+  );
+  useEffect(() => {
+    load();
+    if (!refreshMs) return;
+    const t = setInterval(() => document.visibilityState === 'visible' && load(true), refreshMs);
+    const onFocus = () => load(true);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [load, refreshMs]);
+  return { ...state, reload: () => load(true) };
 }
 
 const moneyFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
-export const money = (v) => `${moneyFmt.format(v ?? 0)} сом`;
+const money0 = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+export const money = (v) => `${moneyFmt.format(v ?? 0)}\u00a0сом`;
+export const moneyShort = (v) => {
+  const a = Math.abs(v ?? 0);
+  if (a >= 1e6) return `${moneyFmt.format(Math.round((v / 1e6) * 10) / 10)} млн`;
+  if (a >= 1e4) return `${moneyFmt.format(Math.round(v / 100) / 10)} тыс`;
+  return money0.format(v ?? 0);
+};
 export const num = (v, d = 1) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: d }).format(v ?? 0);
+export const signed = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${moneyFmt.format(Math.abs(v ?? 0))}`;
 
-export function hours(h) {
-  if (h == null) return '—';
-  const total = Math.round(h * 60);
-  return `${Math.floor(total / 60)} ч ${String(total % 60).padStart(2, '0')} мин`;
-}
-
-export function duration(ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
-}
+export const hh = (h) => `${String(h).padStart(2, '0')}:00`;
 
 export const dateTime = (iso) =>
-  iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
-export const date = (iso) => (iso ? new Date(iso).toLocaleDateString('ru-RU') : '—');
+  iso ? new Date(iso).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 export const time = (iso) => (iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—');
+export const dayLabel = (d, opts = { day: 'numeric', month: 'long' }) => new Date(`${d}T12:00`).toLocaleDateString('ru-RU', opts);
+export const weekday = (d) => new Date(`${d}T12:00`).toLocaleDateString('ru-RU', { weekday: 'short' });
+
+export function ago(iso) {
+  if (!iso) return 'никогда';
+  const m = Math.floor((Date.now() - Date.parse(iso)) / 60000);
+  if (m < 1) return 'только что';
+  if (m < 60) return `${m} мин назад`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ч ${m % 60} мин назад`;
+  return dateTime(iso);
+}
+
+export function minutes(m) {
+  if (m == null) return '—';
+  if (m < 60) return `${m} мин`;
+  return `${Math.floor(m / 60)} ч ${m % 60} мин`;
+}
 
 // Значение для <input type="datetime-local"> в локальном времени.
 export function toLocalInput(iso) {
@@ -58,9 +89,12 @@ export function toLocalInput(iso) {
 }
 export const fromLocalInput = (v) => (v ? new Date(v).toISOString() : null);
 
-export function todayKey() {
-  const d = new Date();
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+export const ymd = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+export const todayKey = () => ymd(new Date());
+export function addDays(key, n) {
+  const d = new Date(`${key}T12:00`);
+  d.setDate(d.getDate() + n);
+  return ymd(d);
 }
 
 export function plural(n, one, few, many) {
@@ -71,63 +105,100 @@ export function plural(n, one, few, many) {
   return many;
 }
 
-// Пресеты периодов. Возвращают { from, to } в ISO, to — исключительно.
-const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+// Пресеты периодов: локальные даты [from, to] включительно.
+const t0 = () => new Date();
 export const PERIODS = {
-  today: { label: 'Сегодня', get: (n) => [startOfDay(n), addDays(startOfDay(n), 1)] },
+  today: { label: 'Сегодня', get: () => [todayKey(), todayKey()] },
+  yesterday: { label: 'Вчера', get: () => [addDays(todayKey(), -1), addDays(todayKey(), -1)] },
   week: {
     label: 'Неделя',
-    get: (n) => {
-      const s = addDays(startOfDay(n), -((n.getDay() + 6) % 7));
-      return [s, addDays(s, 7)];
+    get: () => {
+      const s = addDays(todayKey(), -((t0().getDay() + 6) % 7));
+      return [s, addDays(s, 6)];
     },
   },
-  month: { label: 'Месяц', get: (n) => [new Date(n.getFullYear(), n.getMonth(), 1), new Date(n.getFullYear(), n.getMonth() + 1, 1)] },
+  month: {
+    label: 'Месяц',
+    get: () => {
+      const n = t0();
+      return [ymd(new Date(n.getFullYear(), n.getMonth(), 1)), ymd(new Date(n.getFullYear(), n.getMonth() + 1, 0))];
+    },
+  },
   prevMonth: {
     label: 'Прошлый месяц',
-    get: (n) => [new Date(n.getFullYear(), n.getMonth() - 1, 1), new Date(n.getFullYear(), n.getMonth(), 1)],
+    get: () => {
+      const n = t0();
+      return [ymd(new Date(n.getFullYear(), n.getMonth() - 1, 1)), ymd(new Date(n.getFullYear(), n.getMonth(), 0))];
+    },
   },
-  days30: { label: '30 дней', get: (n) => [addDays(startOfDay(n), -29), addDays(startOfDay(n), 1)] },
-  year: { label: 'Год', get: (n) => [new Date(n.getFullYear(), 0, 1), new Date(n.getFullYear() + 1, 0, 1)] },
+  days30: { label: '30 дней', get: () => [addDays(todayKey(), -29), todayKey()] },
+  year: { label: 'Год', get: () => [`${t0().getFullYear()}-01-01`, `${t0().getFullYear()}-12-31`] },
   custom: { label: 'Свой период' },
 };
-function addDays(d, n) {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-}
 
 export function periodRange(p) {
   if (p.key === 'custom') {
-    const from = p.from ? new Date(`${p.from}T00:00`) : addDays(startOfDay(new Date()), -29);
-    const to = p.to ? addDays(new Date(`${p.to}T00:00`), 1) : addDays(startOfDay(new Date()), 1);
-    return { from: from.toISOString(), to: to.toISOString() };
+    const from = p.from || addDays(todayKey(), -29);
+    const to = p.to && p.to >= from ? p.to : todayKey() >= from ? todayKey() : from;
+    return { from, to };
   }
-  const [from, to] = PERIODS[p.key].get(new Date());
-  return { from: from.toISOString(), to: to.toISOString() };
+  const [from, to] = (PERIODS[p.key] || PERIODS.month).get();
+  return { from, to };
 }
 
 export function periodQuery(p, extra = {}) {
-  const { from, to } = periodRange(p);
-  const q = new URLSearchParams({ from, to, tz: String(new Date().getTimezoneOffset()) });
+  const q = new URLSearchParams(periodRange(p));
   for (const [k, v] of Object.entries(extra)) if (v !== '' && v != null) q.set(k, v);
   return q.toString();
 }
 
-// Выбранный период запоминается на устройстве отдельно для каждой страницы.
-export function usePeriod(storageKey, initial = 'month') {
-  const [period, setPeriod] = useState(() => {
+// Значение, сохраняемое на устройстве (период, фильтры, вкладки).
+export function useStored(key, initial) {
+  const [v, setV] = useState(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem(`period:${storageKey}`));
-      if (saved && PERIODS[saved.key]) return saved;
+      const s = JSON.parse(localStorage.getItem(key));
+      if (s !== null && s !== undefined) return s;
     } catch {}
-    return { key: initial };
+    return initial;
   });
-  const update = (p) => {
-    setPeriod(p);
+  const update = (next) => {
+    setV(next);
     try {
-      localStorage.setItem(`period:${storageKey}`, JSON.stringify(p));
+      localStorage.setItem(key, JSON.stringify(next));
     } catch {}
   };
-  return [period, update];
+  return [v, update];
 }
+
+export function usePeriod(storageKey, initial = 'month') {
+  const [p, setP] = useStored(`period:${storageKey}`, { key: initial });
+  return [PERIODS[p?.key] ? p : { key: initial }, setP];
+}
+
+// «Капающая» сумма: base растёт на perSecond каждую секунду с момента since.
+export function useTicker(base, perSecond, since) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!perSecond) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [perSecond]);
+  if (!perSecond || !since) return base;
+  return base + (perSecond * Math.max(0, now - since)) / 1000;
+}
+
+export const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+// Схема оплаты сотрудника словами.
+export function payModeText(u) {
+  const fixed = u.payFixed !== false;
+  const pct = u.payPercent !== false;
+  if (fixed && pct) return `${money(u.dailyRate)}/день + ${num(u.percent, 2)}%`;
+  if (fixed) return `только оклад ${money(u.dailyRate)}/день`;
+  if (pct) return `только ${num(u.percent, 2)}% с прибыли`;
+  return 'без оклада и %';
+}
+
+export const MONTHS_FULL = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+export const WEEKDAYS_FULL = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
+export const WEEKDAYS_ACC = ['понедельникам', 'вторникам', 'средам', 'четвергам', 'пятницам', 'субботам', 'воскресеньям'];

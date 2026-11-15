@@ -1,49 +1,67 @@
 import { useState } from 'react';
-import { api, useApi, money, num, time } from '../../lib.js';
-import { ErrorBox, Field, Icon, Loading, Modal, MoneyInput, useToast } from '../../components/ui.jsx';
+import { api, useApi, money, num, todayKey, ago, WEEKDAYS } from '../../lib.js';
+import { Avatar, ErrorBox, Field, Icon, Loading, Modal, MoneyInput, PageHead, Toggle, useToast } from '../../components/ui.jsx';
 import { useAuth } from '../../App.jsx';
 
+const daysText = (mask) => {
+  if (mask === 127) return 'каждый день';
+  if (mask === 31) return 'пн–пт';
+  if (mask === 63) return 'пн–сб';
+  return WEEKDAYS.filter((_, i) => (mask >> i) & 1).join(', ') || 'нет рабочих дней';
+};
+
 export function AdminUsers() {
-  const { data, error, loading, reload } = useApi('/admin/users');
+  const { data, error, loading, reload } = useApi('/admin/users', { refreshMs: 30000 });
   const [editing, setEditing] = useState(null);
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Сотрудники</h1>
-        <button className="btn btn-primary btn-sm" onClick={() => setEditing({})}>
-          <Icon name="plus" size={18} /> Добавить
+      <PageHead title="Сотрудники" subtitle="Оклад в день, процент от прибыли, график и цели">
+        <button className="btn btn-primary" onClick={() => setEditing({})}>
+          <Icon name="plus" size={17} /> Добавить
         </button>
-      </div>
+      </PageHead>
       <ErrorBox error={error} onRetry={reload} />
       {loading && !data ? (
         <Loading />
       ) : (
-        <ul className="list">
+        <div className="user-grid">
           {(data || []).map((u) => (
-            <li key={u.id}>
-              <button className={`list-row list-btn ${u.active ? '' : 'dimmed'}`} onClick={() => setEditing(u)}>
-                <div className="user-row">
-                  <span className="avatar">{u.name.trim()[0]?.toUpperCase()}</span>
-                  <div>
-                    <div className="list-title">
-                      {u.name}
-                      {u.role === 'admin' && <span className="tag">админ</span>}
-                      {!u.active && <span className="tag tag-off">заблокирован</span>}
-                      {u.openSince && <span className="tag tag-live">на смене с {time(u.openSince)}</span>}
-                    </div>
-                    <div className="muted small">{u.login}</div>
-                    {u.role === 'operator' && (
-                      <div className="muted small">
-                        {money(u.shiftRate)}/смена · {money(u.hourlyRate)}/ч · {num(u.percent, 2)}%
-                      </div>
-                    )}
-                  </div>
+            <button key={u.id} className={`card user-card ${u.active ? '' : 'dimmed'}`} onClick={() => setEditing(u)}>
+              <div className="user-cell">
+                <Avatar name={u.name} online={u.role === 'operator' ? u.ext.online : undefined} />
+                <div>
+                  <b>{u.name}</b>
+                  <div className="muted small">@{u.login}</div>
                 </div>
-              </button>
-            </li>
+                <div className="tags">
+                  {u.role === 'admin' && <span className="tag tag-accent">админ</span>}
+                  {!u.active && <span className="tag tag-bad">заблокирован</span>}
+                </div>
+              </div>
+              {u.role === 'operator' && (
+                <dl className="user-facts">
+                  <div>
+                    <dt>Оклад</dt>
+                    <dd>{u.payFixed ? `${money(u.dailyRate)}/день` : <span className="muted">выключен</span>}</dd>
+                  </div>
+                  <div>
+                    <dt>% прибыли</dt>
+                    <dd>{u.payPercent ? `${num(u.percent, 2)}%` : <span className="muted">выключен</span>}</dd>
+                  </div>
+                  <div>
+                    <dt>График</dt>
+                    <dd>{daysText(u.workDays)}</dd>
+                  </div>
+                  <div>
+                    <dt>Расширение</dt>
+                    <dd>{u.ext.online ? <span className="pos">онлайн</span> : u.ext.connected ? ago(u.ext.lastSeen) : '—'}</dd>
+                  </div>
+                </dl>
+              )}
+            </button>
           ))}
-        </ul>
+        </div>
       )}
       {editing && (
         <UserModal
@@ -69,15 +87,22 @@ function UserModal({ user, onClose, onSaved }) {
     password: '',
     role: user.role ?? 'operator',
     active: user.active ?? true,
-    shiftRate: user.shiftRate ?? 0,
-    hourlyRate: user.hourlyRate ?? 0,
+    dailyRate: user.dailyRate ?? 0,
     percent: user.percent ?? 0,
-    applyToOpenShift: false,
+    payFixed: user.payFixed ?? true,
+    payPercent: user.payPercent ?? true,
+    dailyGoal: user.dailyGoal ?? 0,
+    workDays: user.workDays ?? 127,
+    payStart: user.payStart ?? todayKey(),
+    rateFrom: todayKey(),
+    applyPercentToday: false,
   });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
   const isMe = user.id === me.id;
+  const rateChanged = !isNew && (Number(String(f.dailyRate).replace(',', '.')) !== user.dailyRate || f.payFixed !== user.payFixed);
+  const pctChanged = !isNew && (Number(String(f.percent).replace(',', '.')) !== user.percent || f.payPercent !== user.payPercent);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -96,7 +121,7 @@ function UserModal({ user, onClose, onSaved }) {
   };
 
   const remove = async () => {
-    if (!confirm(`Удалить учётную запись «${user.name}»? Вход станет невозможен, история смен сохранится в статистике.`)) return;
+    if (!confirm(`Удалить учётную запись «${user.name}»? Вход станет невозможен, оклад перестанет начисляться. История останется в статистике.`)) return;
     try {
       await api(`/admin/users/${user.id}`, { method: 'DELETE' });
       toast('Учётная запись удалена');
@@ -105,6 +130,8 @@ function UserModal({ user, onClose, onSaved }) {
       setError(err.message);
     }
   };
+
+  const toggleDay = (i) => setF({ ...f, workDays: f.workDays ^ (1 << i) });
 
   return (
     <Modal title={isNew ? 'Новый сотрудник' : user.name} onClose={onClose}>
@@ -122,33 +149,55 @@ function UserModal({ user, onClose, onSaved }) {
         </div>
         <Field label="Роль">
           <select value={f.role} onChange={set('role')} disabled={isMe}>
-            <option value="operator">Оператор</option>
+            <option value="operator">Сотрудник</option>
             <option value="admin">Администратор</option>
           </select>
         </Field>
         {f.role === 'operator' && (
-          <>
-            <div className="row3">
-              <Field label="За смену, сом">
-                <MoneyInput value={f.shiftRate} onChange={set('shiftRate')} />
+          <fieldset className="fieldset">
+            <legend>Зарплата</legend>
+            <PayScheme f={f} setF={setF} />
+            <Field label="Цель по прибыли в день, сом" hint="0 — без цели. Когда цель выполнена, сотруднику придёт поздравление">
+              <MoneyInput value={f.dailyGoal} onChange={set('dailyGoal')} />
+            </Field>
+            {rateChanged && (
+              <Field label="Изменение оклада действует с" hint="Прошлые дни останутся по старой ставке">
+                <input type="date" value={f.rateFrom} onChange={set('rateFrom')} />
               </Field>
-              <Field label="В час, сом">
-                <MoneyInput value={f.hourlyRate} onChange={set('hourlyRate')} />
-              </Field>
-              <Field label="% прибыли">
-                <MoneyInput value={f.percent} onChange={set('percent')} />
-              </Field>
-            </div>
-            <p className="muted small">
-              Зарплата за смену = ставка за смену + часы × ставка в час + % от прибыли. Новые ставки действуют для новых смен.
-            </p>
-            {user.openSince && (
+            )}
+            {pctChanged && (
               <label className="check">
-                <input type="checkbox" checked={f.applyToOpenShift} onChange={set('applyToOpenShift')} />
-                Применить новые ставки и к текущей открытой смене
+                <input type="checkbox" checked={f.applyPercentToday} onChange={set('applyPercentToday')} />
+                Применить новый % и к сегодняшним поступлениям
               </label>
             )}
-          </>
+            <div className="field">
+              <span className="field-label">Рабочие дни (в остальные оклад не капает)</span>
+              <div className="weekdays">
+                {WEEKDAYS.map((d, i) => (
+                  <button type="button" key={d} className={(f.workDays >> i) & 1 ? 'on' : ''} onClick={() => toggleDay(i)}>
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <Field label="Оклад начисляется с" hint="Дата начала работы">
+              <input type="date" value={f.payStart} onChange={set('payStart')} />
+            </Field>
+            <p className="formula">
+              <Icon name="info" size={15} />
+              <span>
+                Зарплата за день ={' '}
+                {[
+                  f.payFixed && <b key="f">оклад {money(Number(String(f.dailyRate).replace(',', '.')) || 0)}</b>,
+                  f.payPercent && <b key="p">{num(Number(String(f.percent).replace(',', '.')) || 0, 2)}% от прибыли</b>,
+                ]
+                  .filter(Boolean)
+                  .flatMap((x, i) => (i ? [' + ', x] : [x]))}
+                {!f.payFixed && !f.payPercent && <b>0</b>} + бонусы − штрафы
+              </span>
+            </p>
+          </fieldset>
         )}
         {!isNew && !isMe && (
           <label className="check">
@@ -159,8 +208,8 @@ function UserModal({ user, onClose, onSaved }) {
         {error && <div className="alert alert-error">{error}</div>}
         <div className="form-actions">
           {!isNew && !isMe && (
-            <button type="button" className="btn btn-ghost btn-danger-text" onClick={remove}>
-              Удалить
+            <button type="button" className="btn btn-ghost danger-text" onClick={remove}>
+              <Icon name="trash" size={16} /> Удалить
             </button>
           )}
           <button className="btn btn-primary" disabled={busy}>
@@ -169,5 +218,31 @@ function UserModal({ user, onClose, onSaved }) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+// Схема оплаты: две галочки — фиксированный оклад и % с прибыли. Можно включить одно или оба.
+export function PayScheme({ f, setF }) {
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <div className="pay-scheme">
+      <div className={`pay-opt ${f.payFixed ? 'on' : ''}`}>
+        <Toggle checked={f.payFixed} onChange={(v) => setF({ ...f, payFixed: v })} label="Фиксированный оклад" hint="Капает каждый рабочий день" />
+        {f.payFixed && (
+          <Field label="Оклад в день, сом">
+            <MoneyInput value={f.dailyRate} onChange={set('dailyRate')} />
+          </Field>
+        )}
+      </div>
+      <div className={`pay-opt ${f.payPercent ? 'on' : ''}`}>
+        <Toggle checked={f.payPercent} onChange={(v) => setF({ ...f, payPercent: v })} label="% с прибыли" hint="С каждого поступления" />
+        {f.payPercent && (
+          <Field label="Процент, %">
+            <MoneyInput value={f.percent} onChange={set('percent')} />
+          </Field>
+        )}
+      </div>
+      {!f.payFixed && !f.payPercent && <div className="alert alert-warn">Оба вида оплаты выключены — будут начисляться только бонусы.</div>}
+    </div>
   );
 }

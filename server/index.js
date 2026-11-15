@@ -7,6 +7,7 @@ import { db, migrate, closeDb } from './db.js';
 import { seedAdmin } from './auth.js';
 import { startBackups } from './backup.js';
 import { api } from './api.js';
+import { ext } from './ext.js';
 
 migrate();
 await seedAdmin();
@@ -40,6 +41,8 @@ app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
 });
+// Расширение ходит со своим токеном и с чужого origin — его маршруты идут до CSRF-проверки.
+app.use('/api/ext', ext);
 app.use('/api', api);
 
 const dist = path.resolve(import.meta.dirname, '../dist');

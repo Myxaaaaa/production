@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { api, useApi, usePeriod, periodQuery, money, date, todayKey } from '../../lib.js';
-import { ErrorBox, Empty, Field, Icon, Loading, Modal, MoneyInput, PeriodPicker, useToast } from '../../components/ui.jsx';
+import { api, useApi, periodQuery, money, todayKey } from '../../lib.js';
+import { Avatar, Empty, ErrorBox, Field, Icon, Loading, Modal, MoneyInput, Seg, useToast } from '../../components/ui.jsx';
 
-export function AdminAdjustments() {
-  const [period, setPeriod] = usePeriod('admin-adjustments');
+export function AdjustmentsPanel({ period }) {
   const [userId, setUserId] = useState('');
   const [editing, setEditing] = useState(null);
   const users = useApi('/admin/users');
@@ -14,13 +13,9 @@ export function AdminAdjustments() {
   const fines = rows.filter((a) => a.kind === 'fine').reduce((s, a) => s + a.amount, 0);
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Бонусы и штрафы</h1>
-        <PeriodPicker value={period} onChange={setPeriod} />
-      </div>
+    <>
       <div className="filters">
-        <select value={userId} onChange={(e) => setUserId(e.target.value)} aria-label="Сотрудник">
+        <select className="select-pill" value={userId} onChange={(e) => setUserId(e.target.value)} aria-label="Сотрудник">
           <option value="">Все сотрудники</option>
           {operators.map((u) => (
             <option key={u.id} value={u.id}>
@@ -28,42 +23,47 @@ export function AdminAdjustments() {
             </option>
           ))}
         </select>
+        <button className="btn btn-primary" onClick={() => setEditing({})}>
+          <Icon name="plus" size={17} /> Бонус или штраф
+        </button>
       </div>
       <ErrorBox error={list.error} onRetry={list.reload} />
       {rows.length > 0 && (
-        <div className="summary-line">
-          Бонусы <b className="pos">+{money(bonuses)}</b> · штрафы <b className="neg">−{money(fines)}</b>
+        <div className="summary">
+          <span>
+            Бонусы <b className="pos">+{money(bonuses)}</b>
+          </span>
+          <span>
+            штрафы <b className="neg">−{money(fines)}</b>
+          </span>
         </div>
       )}
       {list.loading && !list.data ? (
         <Loading />
       ) : rows.length === 0 ? (
-        <Empty>За период записей нет</Empty>
+        <Empty icon="gift">За период записей нет</Empty>
       ) : (
-        <ul className="list">
+        <ul className="card list">
           {rows.map((a) => (
-            <li key={a.id}>
-              <button className="list-row list-btn" onClick={() => setEditing(a)}>
+            <li key={a.id} className="clickable" onClick={() => setEditing(a)}>
+              <div className="user-cell">
+                <Avatar name={a.userName} size="sm" />
                 <div>
-                  <div className="list-title">{a.userName}</div>
+                  <b>{a.userName}</b>
                   <div className="muted small">
-                    {date(a.date)} · {a.kind === 'bonus' ? 'бонус' : 'штраф'}
+                    {new Date(a.date).toLocaleDateString('ru-RU')} · {a.kind === 'bonus' ? 'бонус' : 'штраф'}
                     {a.reason && ` · ${a.reason}`}
                   </div>
                 </div>
-                <div className={`list-right ${a.kind === 'bonus' ? 'pos' : 'neg'}`}>
-                  {a.kind === 'bonus' ? '+' : '−'}
-                  {money(a.amount)}
-                </div>
-              </button>
+              </div>
+              <b className={a.kind === 'bonus' ? 'pos' : 'neg'}>
+                {a.kind === 'bonus' ? '+' : '−'}
+                {money(a.amount)}
+              </b>
             </li>
           ))}
         </ul>
       )}
-
-      <button className="fab" onClick={() => setEditing({})} aria-label="Добавить бонус или штраф">
-        <Icon name="plus" size={26} />
-      </button>
 
       {editing && (
         <AdjustmentModal
@@ -76,7 +76,7 @@ export function AdminAdjustments() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -125,14 +125,14 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
   return (
     <Modal title={isNew ? 'Бонус или штраф' : `${item.kind === 'bonus' ? 'Бонус' : 'Штраф'}: ${item.userName}`} onClose={onClose}>
       <form className="form" onSubmit={submit}>
-        <div className="segmented">
-          <button type="button" className={f.kind === 'bonus' ? 'seg-on seg-good' : ''} onClick={() => setF({ ...f, kind: 'bonus' })}>
-            Бонус
-          </button>
-          <button type="button" className={f.kind === 'fine' ? 'seg-on seg-bad' : ''} onClick={() => setF({ ...f, kind: 'fine' })}>
-            Штраф
-          </button>
-        </div>
+        <Seg
+          value={f.kind}
+          onChange={(kind) => setF({ ...f, kind })}
+          options={[
+            { value: 'bonus', label: 'Бонус' },
+            { value: 'fine', label: 'Штраф' },
+          ]}
+        />
         {isNew && (
           <Field label="Сотрудник *">
             <select value={f.userId} onChange={set('userId')} required>
@@ -165,8 +165,8 @@ function AdjustmentModal({ item, operators, onClose, onSaved }) {
         {error && <div className="alert alert-error">{error}</div>}
         <div className="form-actions">
           {!isNew && (
-            <button type="button" className="btn btn-ghost btn-danger-text" onClick={remove}>
-              Удалить
+            <button type="button" className="btn btn-ghost danger-text" onClick={remove}>
+              <Icon name="trash" size={16} /> Удалить
             </button>
           )}
           <button className="btn btn-primary" disabled={busy}>

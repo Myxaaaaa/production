@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { api, useApi, dateTime, date } from '../../lib.js';
-import { ErrorBox, Empty, Field, useToast } from '../../components/ui.jsx';
+import { api, useApi, dateTime, dayLabel } from '../../lib.js';
+import { Empty, ErrorBox, Field, Icon, PageHead, Section, Seg, useToast } from '../../components/ui.jsx';
 
 const EMPTY = { kind: 'info', title: '', body: '', paydayDate: '', targetUserId: '' };
 
@@ -16,13 +16,12 @@ export function AdminNotify() {
   const paydayTemplate = () => {
     const d = new Date();
     d.setDate(d.getDate() + 3);
-    const iso = d.toLocaleDateString('sv-SE');
     setF({
       ...f,
       kind: 'payday',
-      paydayDate: f.paydayDate || iso,
+      paydayDate: f.paydayDate || d.toLocaleDateString('sv-SE'),
       title: 'Скоро день выдачи зарплаты',
-      body: f.body || 'Пожалуйста, проверьте, что все смены закрыты и прибыль внесена.',
+      body: f.body || 'Проверьте в разделе «Заработок», что вся прибыль внесена.',
     });
   };
 
@@ -54,14 +53,21 @@ export function AdminNotify() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Рассылка</h1>
-        <button className="btn btn-ghost btn-sm" onClick={paydayTemplate}>
-          Шаблон «день зарплаты»
+      <PageHead title="Рассылка" subtitle="Сообщения всем или конкретному сотруднику">
+        <button className="btn btn-ghost" onClick={paydayTemplate}>
+          <Icon name="calendar" size={17} /> Шаблон «день зарплаты»
         </button>
-      </div>
-      <form className="card form" onSubmit={submit}>
-        <div className="row2">
+      </PageHead>
+      <div className="two-col">
+        <form className="card form" onSubmit={submit}>
+          <Seg
+            value={f.kind}
+            onChange={(kind) => setF({ ...f, kind })}
+            options={[
+              { value: 'info', label: 'Сообщение' },
+              { value: 'payday', label: 'День зарплаты' },
+            ]}
+          />
           <Field label="Кому">
             <select value={f.targetUserId} onChange={set('targetUserId')}>
               <option value="">Всем сотрудникам</option>
@@ -74,53 +80,50 @@ export function AdminNotify() {
                 ))}
             </select>
           </Field>
-          <Field label="Тип">
-            <select value={f.kind} onChange={set('kind')}>
-              <option value="info">Обычное сообщение</option>
-              <option value="payday">День выдачи зарплаты</option>
-            </select>
+          {f.kind === 'payday' && (
+            <Field label="Дата выдачи зарплаты *" hint="Сотрудники увидят напоминание на главной до этой даты">
+              <input type="date" value={f.paydayDate} onChange={set('paydayDate')} required />
+            </Field>
+          )}
+          <Field label="Заголовок *">
+            <input value={f.title} onChange={set('title')} required maxLength={120} />
           </Field>
-        </div>
-        {f.kind === 'payday' && (
-          <Field label="Дата выдачи зарплаты *" hint="Сотрудники увидят напоминание на главном экране до этой даты">
-            <input type="date" value={f.paydayDate} onChange={set('paydayDate')} required />
+          <Field label="Текст">
+            <textarea value={f.body} onChange={set('body')} rows={4} maxLength={2000} />
           </Field>
-        )}
-        <Field label="Заголовок *">
-          <input value={f.title} onChange={set('title')} required maxLength={120} />
-        </Field>
-        <Field label="Текст">
-          <textarea value={f.body} onChange={set('body')} rows={3} maxLength={2000} />
-        </Field>
-        {error && <div className="alert alert-error">{error}</div>}
-        <button className="btn btn-primary" disabled={busy}>
-          Отправить
-        </button>
-      </form>
+          {error && <div className="alert alert-error">{error}</div>}
+          <div className="form-actions">
+            <button className="btn btn-primary" disabled={busy}>
+              <Icon name="send" size={16} /> Отправить
+            </button>
+          </div>
+        </form>
 
-      <h2 className="section-title">Отправленные</h2>
-      <ErrorBox error={sent.error} onRetry={sent.reload} />
-      {sent.data?.length === 0 ? (
-        <Empty>Пока ничего не отправлено</Empty>
-      ) : (
-        <ul className="list">
-          {(sent.data || []).map((n) => (
-            <li key={n.id} className="list-row">
-              <div>
-                <div className="list-title">{n.title}</div>
-                {n.paydayDate && <div className="small">Выдача: {date(`${n.paydayDate}T00:00`)}</div>}
-                {n.body && <div className="muted small clamp">{n.body}</div>}
-                <div className="muted small">
-                  {n.targetName ? `→ ${n.targetName}` : '→ всем'} · {dateTime(n.createdAt)} · прочитали {n.reads} из {n.recipients}
-                </div>
-              </div>
-              <button className="btn btn-ghost btn-sm btn-danger-text" onClick={() => remove(n)}>
-                Удалить
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+        <Section title="Отправленные">
+          <ErrorBox error={sent.error} onRetry={sent.reload} />
+          {sent.data?.length === 0 ? (
+            <Empty icon="send">Пока ничего не отправлено</Empty>
+          ) : (
+            <ul className="card list">
+              {(sent.data || []).map((n) => (
+                <li key={n.id}>
+                  <div>
+                    <b>{n.title}</b>
+                    {n.paydayDate && <div className="small">Выдача: {dayLabel(n.paydayDate)}</div>}
+                    {n.body && <div className="muted small clamp">{n.body}</div>}
+                    <div className="muted small">
+                      {n.targetName ? `→ ${n.targetName}` : '→ всем'} · {dateTime(n.createdAt)} · прочитали {n.reads} из {n.recipients}
+                    </div>
+                  </div>
+                  <button className="icon-btn" onClick={() => remove(n)} aria-label="Удалить">
+                    <Icon name="trash" size={16} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+      </div>
     </div>
   );
 }

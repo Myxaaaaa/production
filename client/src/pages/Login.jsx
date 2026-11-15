@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../lib.js';
-import { Field } from '../components/ui.jsx';
+import { Field, Icon } from '../components/ui.jsx';
 
 export function Login({ onLogin }) {
   const [login, setLogin] = useState('');
@@ -23,19 +23,34 @@ export function Login({ onLogin }) {
 
   return (
     <div className="login-wrap">
-      <form className="card login" onSubmit={submit}>
-        <img src="/icon.svg" alt="" width="56" height="56" />
-        <h1>Учёт смен</h1>
+      <aside className="login-art" aria-hidden="true">
+        <div className="login-art-inner">
+          <img src="/icon.svg" alt="" width="48" height="48" />
+          <h2>Зарплата, которая капает сама</h2>
+          <ul>
+            <li>
+              <Icon name="drop" size={18} /> Прибыль приходит прямо с рабочего сайта
+            </li>
+            <li>
+              <Icon name="coins" size={18} /> Оклад начисляется каждый день, без смен
+            </li>
+            <li>
+              <Icon name="flame" size={18} /> Видно, в какие часы работа приносит больше всего
+            </li>
+          </ul>
+          <div className="drops">
+            <i />
+            <i />
+            <i />
+          </div>
+        </div>
+      </aside>
+      <form className="login" onSubmit={submit}>
+        <img className="login-logo" src="/icon.svg" alt="" width="44" height="44" />
+        <h1>Вход в «Смены»</h1>
         <p className="muted">Войдите под своей учётной записью</p>
         <Field label="Логин">
-          <input
-            value={login}
-            onChange={(e) => setLogin(e.target.value)}
-            autoComplete="username"
-            autoCapitalize="none"
-            autoCorrect="off"
-            required
-          />
+          <input value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" required autoFocus />
         </Field>
         <Field label="Пароль">
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
