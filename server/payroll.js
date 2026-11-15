@@ -101,7 +101,9 @@ export function payrollFor(user, from, to, { breakdown = false } = {}) {
     if (breakdown) {
       const x = day(local(Date.parse(e.at), tz).date);
       x.profit += e.amount;
-      x.percent += pct + e.base_pay;
+      // Ставка за перенесённые старые смены — это оклад за тот день.
+      x.base += e.base_pay;
+      x.percent += pct;
       x.events++;
     }
   }
@@ -162,9 +164,9 @@ export function ratePerSecond(user) {
 export function exportPay(r) {
   const out = {
     workDays: Math.round(r.workDays * 100) / 100,
-    base: fromCents(r.base),
+    base: fromCents(r.base + r.legacy),
     profit: fromCents(r.profit),
-    percentPay: fromCents(r.percent + r.legacy),
+    percentPay: fromCents(r.percent),
     bonuses: fromCents(r.bonuses),
     fines: fromCents(r.fines),
     corrections: fromCents(r.corrections),

@@ -175,8 +175,8 @@ export function computeMoney({ from, to, userId = null }) {
   for (const u of users) {
     const p = payrollFor(u, from, to, { breakdown: true });
     tot.profit += p.profit;
-    tot.base += p.base;
-    tot.percent += p.percent + p.legacy;
+    tot.base += p.base + p.legacy;
+    tot.percent += p.percent;
     tot.bonuses += p.bonuses;
     tot.fines += p.fines;
     tot.corrections += p.corrections;

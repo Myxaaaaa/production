@@ -1,5 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
+import path from 'node:path';
+import fs from 'node:fs';
 import { config } from './config.js';
+import { dayStartMs, local, validTz } from './time.js';
 
 export const db = new DatabaseSync(config.dbFile);
 
@@ -24,6 +27,14 @@ export function tx(fn) {
 }
 
 const NOW = `(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
+
+// Закрытые смены (старая схема со сменами) переносятся в поступления вместе с заработанной по ним ставкой.
+const V2_FROM_SHIFTS = `
+      INSERT INTO profit_events (user_id, amount, percent, base_pay, at, source, note, created_by, created_at)
+      SELECT user_id, profit, percent,
+             shift_rate + CAST(ROUND((julianday(end_at) - julianday(start_at)) * 24 * hourly_rate) AS INTEGER),
+             end_at, 'shift', note, created_by, created_at
+      FROM shifts WHERE end_at IS NOT NULL AND profit IS NOT NULL;`;
 
 // Миграции только добавляются в конец списка, существующие не меняются.
 const migrations = [
@@ -171,13 +182,7 @@ const migrations = [
       CREATE INDEX idx_payouts_user_date ON payouts(user_id, date);
 
       CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-
-      -- Закрытые смены переносятся в поступления вместе с заработанной по ним ставкой.
-      INSERT INTO profit_events (user_id, amount, percent, base_pay, at, source, note, created_by, created_at)
-      SELECT user_id, profit, percent,
-             shift_rate + CAST(ROUND((julianday(end_at) - julianday(start_at)) * 24 * hourly_rate) AS INTEGER),
-             end_at, 'shift', note, created_by, created_at
-      FROM shifts WHERE end_at IS NOT NULL AND profit IS NOT NULL;
+      ${V2_FROM_SHIFTS}
 
       UPDATE users SET pay_start = strftime('%Y-%m-%d', 'now', '+6 hours');
     `,
@@ -244,7 +249,24 @@ export function migrate() {
     name TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT ${NOW}
   )`);
-  const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version));
+  const rows = db.prepare('SELECT version, name FROM schema_migrations').all();
+  const applied = new Set(rows.map((r) => r.version));
+  const fromSchedule = rows.some((r) => r.version === 2 && r.name === 'schedule');
+  const pending = migrations.filter((m) => !applied.has(m.version));
+
+  // Перед любым обновлением схемы существующей базы — отдельная копия, которую не удаляет ротация бэкапов.
+  if ((pending.length || fromSchedule) && rows.length) {
+    fs.mkdirSync(config.backupDir, { recursive: true });
+    const file = path.join(config.backupDir, `before-migrate-${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
+    db.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+    console.log(`[db] копия перед обновлением: ${path.basename(file)}`);
+  }
+
+  if (fromSchedule) {
+    tx(() => convertFromSchedule());
+    console.log('[db] данные версии «График» (workdays) перенесены в новую схему');
+  }
+
   for (const m of migrations) {
     if (applied.has(m.version)) continue;
     tx(() => {
@@ -262,4 +284,74 @@ export function closeDb() {
   try {
     db.close();
   } catch {}
+}
+
+// База, созданная версией «График вместо открытия смен» (миграция 2_schedule, таблица workdays),
+// переводится в схему «оклад в день + поступления прибыли» без потери данных:
+//   • прошедшие смены → поступления (source='shift') вместе с заработанной ставкой за смену и часы,
+//     так что начисленная за прошлое зарплата не меняется;
+//   • запланированные смены → дни «смена» в графике, невыходы → «выходной» с причиной;
+//   • оклад в день = ставка за смену + часы смены по умолчанию × ставка в час, капает с дня перехода;
+//   • даты бонусов и штрафов снова хранятся как момент времени;
+//   • сама таблица workdays не удаляется, а переименовывается в legacy_workdays.
+function convertFromSchedule() {
+  const v2 = migrations.find((m) => m.version === 2);
+  db.exec(v2.sql.replace(V2_FROM_SHIFTS, ''));
+
+  const envTz = (process.env.APP_TIMEZONE || '').trim();
+  const tz = envTz && validTz(envTz) ? envTz : 'Asia/Bishkek';
+  db.prepare("INSERT INTO settings (key, value) VALUES ('tz', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(tz);
+
+  const toMin = (t) => Number(String(t).slice(0, 2)) * 60 + Number(String(t).slice(3, 5));
+  const span = (a, b) => {
+    const m = toMin(b) - toMin(a);
+    return m <= 0 ? m + 1440 : m;
+  };
+  const now = Date.now();
+  const today = local(now, tz).date;
+  const at = (date, startTime, minutes) => new Date(Math.min(now, dayStartMs(date, tz) + (toMin(startTime) + minutes) * 60000)).toISOString();
+
+  // Ставки сотрудников: оклад в день из ставки за смену и почасовой ставки.
+  const setUser = db.prepare('UPDATE users SET daily_rate = ?, work_days = 0, pay_start = ? WHERE id = ?');
+  const setRate = db.prepare('INSERT OR REPLACE INTO rate_history (user_id, from_date, daily_rate) VALUES (?, ?, ?)');
+  for (const u of db.prepare('SELECT * FROM users').all()) {
+    const rate = u.shift_rate + Math.round((span(u.default_start || '10:00', u.default_end || '22:00') / 60) * u.hourly_rate);
+    setUser.run(rate, today, u.id);
+    setRate.run(u.id, '2000-01-01', rate);
+  }
+
+  const putDay = db.prepare(
+    'INSERT INTO days_off (user_id, date, kind, note) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, date) DO UPDATE SET kind = excluded.kind, note = excluded.note'
+  );
+  const putEvent = db.prepare(
+    `INSERT INTO profit_events (user_id, amount, percent, base_pay, at, source, note, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, 'shift', ?, ?, ?)`
+  );
+  for (const d of db.prepare('SELECT * FROM workdays ORDER BY date, id').all()) {
+    if (d.status === 'absent') {
+      putDay.run(d.user_id, d.date, 'off', `Невыход${d.absence_reason ? `: ${d.absence_reason}` : ''}`.slice(0, 120));
+      continue;
+    }
+    putDay.run(d.user_id, d.date, 'work', '');
+    const minutes = span(d.start_time, d.end_time);
+    const by = d.profit_by ?? d.created_by;
+    if (d.date < today) {
+      // Прошедшая смена: прибыль и заработанная ставка — одним поступлением в конце смены.
+      const base = d.shift_rate + Math.round((minutes / 60) * d.hourly_rate);
+      if (d.profit === null && base === 0) continue;
+      putEvent.run(d.user_id, d.profit ?? 0, d.percent, base, at(d.date, d.start_time, minutes), d.note.slice(0, 500), by, d.created_at);
+    } else if (d.profit !== null) {
+      // Сегодня и позже: ставка капает по новой схеме, переносим только уже внесённую прибыль.
+      putEvent.run(d.user_id, d.profit, d.percent, 0, d.profit_at || at(d.date, d.start_time, minutes), d.note.slice(0, 500), by, d.created_at);
+    }
+  }
+
+  // Бонусы и штрафы: «ГГГГ-ММ-ДД» → полдень этого дня в часовом поясе компании.
+  const updAdj = db.prepare('UPDATE adjustments SET date = ? WHERE id = ?');
+  for (const a of db.prepare('SELECT id, date FROM adjustments').all()) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(a.date)) updAdj.run(new Date(dayStartMs(a.date, tz) + 12 * 3600000).toISOString(), a.id);
+  }
+
+  db.exec('ALTER TABLE workdays RENAME TO legacy_workdays');
+  db.prepare("UPDATE schema_migrations SET name = 'daily_pay_and_profit_events_from_schedule' WHERE version = 2").run();
 }
