@@ -1,39 +1,64 @@
 import { useState } from 'react';
-import { api, useApi, usePeriod, periodQuery, periodRange, money, num, dayLabel, dateTime, todayKey, useStored, payModeText, signed } from '../../lib.js';
+import { api, useApi, usePeriod, periodQuery, periodRange, money, num, dayLabel, dateTime, todayKey, useStored, payModeText, signed, plural } from '../../lib.js';
 import { Avatar, Empty, ErrorBox, Field, Icon, Kpi, Loading, Modal, MoneyInput, PageHead, PeriodPicker, Seg, useToast } from '../../components/ui.jsx';
 import { ScheduleCalendar } from '../../components/schedule.jsx';
 import { AdjustmentsPanel } from './Adjustments.jsx';
 import { PayScheme } from './Users.jsx';
+import { PaydayCard } from '../../components/payday.jsx';
 
 const parseNum = (v) => Number(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
 
+// Каждый раздел — отдельная вкладка в меню.
 export function AdminPayroll() {
-  const [tab, setTab] = useStored('payroll-tab', 'sheet');
   const [period, setPeriod] = usePeriod('admin-payroll');
-  const pending = useApi('/admin/advances/pending', { refreshMs: 30000 });
-  const n = pending.data?.pending || 0;
-  const periodTabs = ['sheet', 'payouts', 'adjustments'];
   return (
     <div className="page">
-      <PageHead title="Зарплата" subtitle="Ведомость, график смен, авансы и выплаты">
-        {periodTabs.includes(tab) && <PeriodPicker value={period} onChange={setPeriod} />}
+      <PageHead title="Зарплата" subtitle="Сколько начислено и сколько осталось выплатить">
+        <PeriodPicker value={period} onChange={setPeriod} />
       </PageHead>
-      <Seg
-        value={tab}
-        onChange={setTab}
-        options={[
-          { value: 'sheet', label: 'Ведомость' },
-          { value: 'schedule', label: 'График' },
-          { value: 'advances', label: n ? `Авансы · ${n}` : 'Авансы' },
-          { value: 'payouts', label: 'Выплаты' },
-          { value: 'adjustments', label: 'Бонусы и штрафы' },
-        ]}
-      />
-      {tab === 'sheet' && <Sheet period={period} />}
-      {tab === 'schedule' && <SchedulePanel />}
-      {tab === 'advances' && <AdvancesPanel onChange={pending.reload} />}
-      {tab === 'payouts' && <Payouts period={period} />}
-      {tab === 'adjustments' && <AdjustmentsPanel period={period} />}
+      <Sheet period={period} />
+    </div>
+  );
+}
+
+export function AdminSchedule() {
+  return (
+    <div className="page">
+      <PageHead title="График" subtitle="Смены, выходные и прибыль за каждый день" />
+      <SchedulePanel />
+    </div>
+  );
+}
+
+export function AdminAdvances() {
+  return (
+    <div className="page">
+      <PageHead title="Авансы" subtitle="Заявки сотрудников: одобрить или отклонить" />
+      <AdvancesPanel />
+    </div>
+  );
+}
+
+export function AdminPayouts() {
+  const [period, setPeriod] = usePeriod('admin-payouts');
+  return (
+    <div className="page">
+      <PageHead title="Выплаты" subtitle="Что уже выдано на руки, включая авансы">
+        <PeriodPicker value={period} onChange={setPeriod} />
+      </PageHead>
+      <Payouts period={period} />
+    </div>
+  );
+}
+
+export function AdminBonuses() {
+  const [period, setPeriod] = usePeriod('admin-adjustments');
+  return (
+    <div className="page">
+      <PageHead title="Бонусы и штрафы">
+        <PeriodPicker value={period} onChange={setPeriod} />
+      </PageHead>
+      <AdjustmentsPanel period={period} />
     </div>
   );
 }
@@ -44,17 +69,51 @@ function Sheet({ period }) {
   const [pay, setPay] = useState(null);
   const [open, setOpen] = useState(null);
   const [salary, setSalary] = useState(null);
+  const [picked, setPicked] = useState(() => new Set());
+  const [bulk, setBulk] = useState(null);
   if (loading && !data) return <Loading />;
   if (!data) return <ErrorBox error={error} onRetry={reload} />;
   const t = data.totals;
+  const owed = data.rows.filter((r) => r.balance > 0);
+  const pick = (id) => {
+    const next = new Set(picked);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setPicked(next);
+  };
+  const pickedRows = owed.filter((r) => picked.has(r.userId));
   return (
     <>
+      <PaydayCard />
       <div className="kpis">
         <Kpi label="Начислено за период" icon="coins" tone="accent" value={money(t.accrued)} sub={`оклады ${money(t.base)} · % ${money(t.percentPay)}`} />
         <Kpi label="Прибыль за период" icon="drop" value={money(t.profit)} sub={t.profit > 0 ? `зарплаты — ${num((t.accrued / t.profit) * 100, 1)}% от прибыли` : '—'} />
         <Kpi label="Выплачено" icon="wallet" value={money(t.paid)} sub="за период, включая авансы" />
         <Kpi label="Долг по зарплате" icon="target" tone={t.balance > 0 ? 'warn' : undefined} value={money(t.balance)} sub="баланс к выплате, всё время" />
       </div>
+      {owed.length > 0 ? (
+        <div className="card bulk-bar">
+          <div>
+            <b>
+              Осталось выдать: {owed.length} {plural(owed.length, 'сотруднику', 'сотрудникам', 'сотрудникам')}
+            </b>
+            <div className="muted small">на сумму {money(owed.reduce((s, r) => s + r.balance, 0))} · отметьте галочками, кому выдаёте, или выплатите всем сразу</div>
+          </div>
+          <div className="bulk-actions">
+            {pickedRows.length > 0 && (
+              <button className="btn" onClick={() => setBulk(pickedRows)}>
+                Выплатить отмеченным ({pickedRows.length})
+              </button>
+            )}
+            <button className="btn btn-primary" onClick={() => setBulk(owed)}>
+              <Icon name="check" size={17} /> Зарплата выдана всем
+            </button>
+          </div>
+        </div>
+      ) : data.rows.length > 0 ? (
+        <div className="card bulk-bar done">
+          <b>✅ Зарплата выдана всем — долгов нет</b>
+        </div>
+      ) : null}
       {data.rows.length === 0 ? (
         <Empty icon="users">Сотрудников пока нет</Empty>
       ) : (
@@ -62,8 +121,16 @@ function Sheet({ period }) {
           <table className="table">
             <thead>
               <tr>
+                <th className="check-col">
+                  <input
+                    type="checkbox"
+                    aria-label="Отметить всех, кому осталось выдать"
+                    checked={owed.length > 0 && pickedRows.length === owed.length}
+                    onChange={(e) => setPicked(new Set(e.target.checked ? owed.map((r) => r.userId) : []))}
+                  />
+                </th>
                 <th>Сотрудник</th>
-                <th className="num hide-sm">Дней</th>
+                <th className="num hide-sm">Смен</th>
                 <th className="num hide-sm">Оклад</th>
                 <th className="num hide-sm">% прибыли</th>
                 <th className="num hide-sm">Бонусы / штрафы</th>
@@ -74,17 +141,23 @@ function Sheet({ period }) {
             </thead>
             <tbody>
               {data.rows.map((r) => (
-                <tr key={r.userId} className={`clickable ${r.active ? '' : 'row-off'}`} onClick={() => setOpen(r)}>
+                <tr key={r.userId} className={`clickable ${r.active ? '' : 'row-off'} ${picked.has(r.userId) ? 'row-picked' : ''}`} onClick={() => setOpen(r)}>
+                  <td className="check-col" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" disabled={r.balance <= 0} checked={picked.has(r.userId)} onChange={() => pick(r.userId)} aria-label={`Отметить ${r.name}`} />
+                  </td>
                   <td>
                     <div className="user-cell">
                       <Avatar name={r.name} size="sm" />
                       <div>
                         {r.name}
-                        <div className="muted small">{payModeText(r)}</div>
+                        <div className="small">{r.balance > 0 ? <span className="tag tag-warn">осталось выдать</span> : <span className="tag tag-accent">✅ выдано</span>}</div>
                       </div>
                     </div>
                   </td>
-                  <td className="num hide-sm">{num(r.workDays, 1)}</td>
+                  <td className="num hide-sm">
+                    {r.workDays}
+                    {r.pendingDays > 0 && <div className="warn-text small" title="Смены без заполненной прибыли">⏳ {r.pendingDays}</div>}
+                  </td>
                   <td className="num hide-sm">{r.payFixed || r.base ? money(r.base) : <span className="muted">выкл.</span>}</td>
                   <td className="num hide-sm">{r.payPercent || r.percentPay ? money(r.percentPay) : <span className="muted">выкл.</span>}</td>
                   <td className="num hide-sm">
@@ -140,8 +213,66 @@ function Sheet({ period }) {
         />
       )}
       {salary && <SalaryModal row={salary} onClose={() => (setSalary(null), reload())} />}
+      {bulk && <BulkPayModal rows={bulk} onClose={() => setBulk(null)} onDone={() => (setBulk(null), setPicked(new Set()), reload())} />}
       {open && <EmployeeModal row={open} period={period} onClose={() => (setOpen(null), reload())} />}
     </>
+  );
+}
+
+// Выплатить всю сумму к выплате сразу нескольким сотрудникам.
+function BulkPayModal({ rows, onClose, onDone }) {
+  const toast = useToast();
+  const [f, setF] = useState({ date: todayKey(), note: 'Зарплата', notify: true });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const total = Math.round(rows.reduce((s, r) => s + r.balance, 0) * 100) / 100;
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await api('/admin/payouts/bulk', { method: 'POST', body: { ...f, userIds: rows.map((x) => x.userId) } });
+      toast(`Выплачено ${r.count} ${plural(r.count, 'сотруднику', 'сотрудникам', 'сотрудникам')} на ${money(r.total)}`);
+      onDone();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Выдать зарплату" subtitle={`${rows.length} ${plural(rows.length, 'сотрудник', 'сотрудника', 'сотрудников')} · ${money(total)}`} onClose={onClose}>
+      <form className="form" onSubmit={submit}>
+        <ul className="list bulk-list">
+          {rows.map((r) => (
+            <li key={r.userId}>
+              <div className="user-cell">
+                <Avatar name={r.name} size="sm" /> {r.name}
+              </div>
+              <b>{money(r.balance)}</b>
+            </li>
+          ))}
+        </ul>
+        <div className="row2">
+          <Field label="Дата выдачи">
+            <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} required />
+          </Field>
+          <Field label="Комментарий">
+            <input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} maxLength={200} />
+          </Field>
+        </div>
+        <label className="check">
+          <input type="checkbox" checked={f.notify} onChange={(e) => setF({ ...f, notify: e.target.checked })} /> Отправить сотрудникам уведомление
+        </label>
+        {error && <div className="alert alert-error">{error}</div>}
+        <div className="form-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Отмена
+          </button>
+          <button className="btn btn-primary" disabled={busy}>
+            Выплатить {money(total)}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
 import { config } from './config.js';
-import { dayStartMs, local, validTz } from './time.js';
+import { addDays, dayStartMs, dowOf, local, validTz } from './time.js';
 
 export const db = new DatabaseSync(config.dbFile);
 
@@ -14,15 +14,20 @@ db.exec(`
   PRAGMA busy_timeout = 5000;
 `);
 
+let txDepth = 0;
 export function tx(fn) {
+  // Вложенный вызов выполняется внутри уже открытой транзакции.
+  if (txDepth > 0) return fn();
   db.exec('BEGIN IMMEDIATE');
+  txDepth++;
+  let ok = false;
   try {
     const result = fn();
-    db.exec('COMMIT');
+    ok = true;
     return result;
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
+  } finally {
+    txDepth--;
+    db.exec(ok ? 'COMMIT' : 'ROLLBACK');
   }
 }
 
@@ -241,7 +246,38 @@ const migrations = [
       CREATE INDEX idx_advance_log_adv ON advance_log(advance_id);
     `,
   },
+  {
+    // Оклад за смену начисляется только после того, как за день заполнена прибыль.
+    // Отметка «прибыль за день заполнена» (в том числе нулевая).
+    version: 5,
+    name: 'day_reports',
+    sql: `
+      CREATE TABLE day_reports (
+        user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date      TEXT NOT NULL,
+        filled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        filled_at TEXT NOT NULL DEFAULT ${NOW},
+        PRIMARY KEY (user_id, date)
+      );
+    `,
+    // Уже прошедшие рабочие дни считаем заполненными — начисленное за прошлое не меняется.
+    run: () => backfillDayReports(),
+  },
 ];
+
+function backfillDayReports() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'tz'").get();
+  const tz = row && validTz(row.value) ? row.value : 'Asia/Bishkek';
+  const yesterday = addDays(local(Date.now(), tz).date, -1);
+  const put = db.prepare('INSERT OR IGNORE INTO day_reports (user_id, date) VALUES (?, ?)');
+  for (const u of db.prepare('SELECT id, work_days, pay_start FROM users WHERE pay_start IS NOT NULL').all()) {
+    const over = new Map(db.prepare('SELECT date, kind FROM days_off WHERE user_id = ?').all(u.id).map((r) => [r.date, r.kind]));
+    for (let d = u.pay_start; d <= yesterday; d = addDays(d, 1)) {
+      const work = over.has(d) ? over.get(d) === 'work' : ((u.work_days >> dowOf(d)) & 1) === 1;
+      if (work) put.run(u.id, d);
+    }
+  }
+}
 
 export function migrate() {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -271,6 +307,7 @@ export function migrate() {
     if (applied.has(m.version)) continue;
     tx(() => {
       db.exec(m.sql);
+      m.run?.();
       db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)').run(m.version, m.name);
     });
     console.log(`[db] применена миграция ${m.version}_${m.name}`);

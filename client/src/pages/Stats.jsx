@@ -40,9 +40,9 @@ export function StatsPage() {
             value={tab}
             onChange={setTab}
             options={[
-              { value: 'rating', label: '🏆 Рейтинг' },
-              { value: 'days', label: '📅 По дням' },
-              { value: 'time', label: '⏰ По времени' },
+              { value: 'rating', label: 'Рейтинг' },
+              { value: 'days', label: 'По дням' },
+              { value: 'time', label: 'По времени' },
             ]}
           />
 

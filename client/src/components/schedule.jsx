@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, useApi, addDays, todayKey, moneyShort, money, plural, dayLabel, WEEKDAYS, MONTHS_FULL } from '../lib.js';
-import { Field, Icon, Loading, Seg, useToast } from './ui.jsx';
+import { Field, Icon, Loading, MoneyInput, Seg, useToast } from './ui.jsx';
 
 // Что можно поставить на день.
 export const DAY_KIND = {
@@ -246,6 +246,7 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
             <span>
               <b>{count((d) => d.work)}</b> раб. {plural(count((d) => d.work), 'день', 'дня', 'дней')}
             </span>
+            {count((d) => d.pending) > 0 && <span className="warn-text">⏳ {count((d) => d.pending)} ждут прибыль</span>}
             {count((d) => d.kind === 'vacation') > 0 && <span>🏖️ {count((d) => d.kind === 'vacation')} отпуск</span>}
             {count((d) => d.kind === 'sick') > 0 && <span>🤒 {count((d) => d.kind === 'sick')} больн.</span>}
             {count((d) => d.profit > 0) > 0 && (
@@ -270,16 +271,17 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
               <div
                 key={d.date}
                 data-date={readOnly ? undefined : d.date}
-                className={`cal-day ${dayClass(d)} ${monthOf(d.date) !== month ? 'out' : ''} ${d.date === today ? 'today' : ''} ${sel.has(d.date) ? 'sel' : ''} ${d.date < today ? 'past' : ''}`}
+                className={`cal-day ${dayClass(d)} ${monthOf(d.date) !== month ? 'out' : ''} ${d.date === today ? 'today' : ''} ${sel.has(d.date) ? 'sel' : ''} ${d.date < today ? 'past' : ''} ${d.pending ? 'pend' : ''}`}
                 title={`${dayLabel(d.date, { weekday: 'long', day: 'numeric', month: 'long' })}${d.note ? ` · ${d.note}` : ''}`}
               >
                 <span className="cal-n">{Number(d.date.slice(8))}</span>
                 {d.kind ? <span className="cal-k">{DAY_KIND[d.kind].short}</span> : null}
-                {d.profit > 0 && <span className="cal-p">{moneyShort(d.profit)}</span>}
+                {d.pending ? <span className="cal-p cal-wait">⏳</span> : d.filled || d.profit ? <span className="cal-p">{moneyShort(d.profit)}</span> : null}
               </div>
             ))}
           </div>
           <div className="cal-legend">
+            <span>⏳ прибыль не заполнена — оклад ещё не начислен</span>
             <span>
               <i className="k-plan" /> рабочий по графику
             </span>
@@ -294,7 +296,10 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
           </div>
           {!readOnly && !sel.size && (
             <p className="muted small sched-help">
-              <Icon name="info" size={14} /> Нажмите на день, чтобы выбрать его. Чтобы выбрать сразу несколько — <b>зажмите и проведите</b> по дням (на телефоне — подержите палец полсекунды и ведите). Или нажмите «С … по …».
+              <Icon name="info" size={14} />
+              <span>
+                Нажмите на день — сможете вписать прибыль или поменять смену. Чтобы выбрать сразу несколько — <b>зажмите и проведите</b> по дням (на телефоне — подержите палец полсекунды и ведите). Или нажмите «С … по …».
+              </span>
             </p>
           )}
         </>
@@ -310,6 +315,9 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
               Снять выделение
             </button>
           </div>
+          {sel.size === 1 && [...sel][0] <= today && (
+            <DayProfitForm key={[...sel][0]} userId={userId} day={byDate.get([...sel][0]) || { date: [...sel][0] }} onSaved={() => (setSel(new Set()), reload(), onChanged?.())} />
+          )}
           <div className="sched-actions">
             {Object.entries(DAY_KIND).map(([k, v]) => (
               <button key={k} type="button" className={`btn btn-sm kind-btn ${v.cls}`} disabled={busy} onClick={() => markSelected(k)}>
@@ -323,6 +331,42 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Прибыль за выбранный день: после сохранения начисляются оклад за смену и процент.
+function DayProfitForm({ userId, day, onSaved }) {
+  const toast = useToast();
+  const [amount, setAmount] = useState(day.filled || day.profit ? String(day.profit) : '');
+  const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!amount.trim()) return;
+    setBusy(true);
+    try {
+      await api('/admin/day-profit', { method: 'PUT', body: { userId, date: day.date, amount } });
+      toast(`Прибыль за ${dayLabel(day.date, { day: 'numeric', month: 'long' })} сохранена`);
+      onSaved();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="day-profit" onSubmit={submit}>
+      <label className="field-label">
+        Прибыль за {dayLabel(day.date, { day: 'numeric', month: 'long' })}
+        {day.pending && <span className="warn-text"> · ждёт заполнения</span>}
+      </label>
+      <div className="quick">
+        <MoneyInput value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Сумма, сом (0 — без прибыли)" />
+        <button className="btn btn-primary" disabled={busy || !amount.trim()}>
+          Сохранить
+        </button>
+      </div>
+      {(day.filled || day.profit) ? <div className="muted small">Сейчас: {money(day.profit)} · заработок за день {money(day.total)}</div> : null}
+    </form>
   );
 }
 

@@ -26,23 +26,18 @@ export function Login({ onLogin }) {
       <aside className="login-art" aria-hidden="true">
         <div className="login-art-inner">
           <img src="/icon.svg" alt="" width="48" height="48" />
-          <h2>Зарплата, которая капает сама</h2>
+          <h2>График, прибыль и зарплата в одном месте</h2>
           <ul>
             <li>
-              <Icon name="drop" size={18} /> Прибыль приходит прямо с рабочего сайта
+              <Icon name="drop" size={18} /> Заполнили прибыль за смену — зарплата посчиталась
             </li>
             <li>
-              <Icon name="coins" size={18} /> Оклад начисляется каждый день, без смен
+              <Icon name="coins" size={18} /> Оклад за смену и % от прибыли
             </li>
             <li>
-              <Icon name="flame" size={18} /> Видно, в какие часы работа приносит больше всего
+              <Icon name="calendar" size={18} /> График смен и дни выдачи зарплаты
             </li>
           </ul>
-          <div className="drops">
-            <i />
-            <i />
-            <i />
-          </div>
         </div>
       </aside>
       <form className="login" onSubmit={submit}>

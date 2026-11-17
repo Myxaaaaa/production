@@ -16,7 +16,7 @@ export function AdminUsers() {
 
   return (
     <div className="page">
-      <PageHead title="Сотрудники" subtitle="Оклад в день, процент от прибыли, график и цели">
+      <PageHead title="Сотрудники" subtitle="Оклад за смену, процент от прибыли, график и цели">
         <button className="btn btn-primary" onClick={() => setEditing({})}>
           <Icon name="plus" size={17} /> Добавить
         </button>
@@ -29,7 +29,7 @@ export function AdminUsers() {
           {(data || []).map((u) => (
             <button key={u.id} className={`card user-card ${u.active ? '' : 'dimmed'}`} onClick={() => setEditing(u)}>
               <div className="user-cell">
-                <Avatar name={u.name} online={u.role === 'operator' ? u.ext.online : undefined} />
+                <Avatar name={u.name} />
                 <div>
                   <b>{u.name}</b>
                   <div className="muted small">@{u.login}</div>
@@ -43,7 +43,7 @@ export function AdminUsers() {
                 <dl className="user-facts">
                   <div>
                     <dt>Оклад</dt>
-                    <dd>{u.payFixed ? `${money(u.dailyRate)}/день` : <span className="muted">выключен</span>}</dd>
+                    <dd>{u.payFixed ? `${money(u.dailyRate)} за смену` : <span className="muted">выключен</span>}</dd>
                   </div>
                   <div>
                     <dt>% прибыли</dt>
@@ -52,10 +52,6 @@ export function AdminUsers() {
                   <div>
                     <dt>График</dt>
                     <dd>{daysText(u.workDays)}</dd>
-                  </div>
-                  <div>
-                    <dt>Расширение</dt>
-                    <dd>{u.ext.online ? <span className="pos">онлайн</span> : u.ext.connected ? ago(u.ext.lastSeen) : '—'}</dd>
                   </div>
                 </dl>
               )}
@@ -172,7 +168,7 @@ function UserModal({ user, onClose, onSaved }) {
               </label>
             )}
             <div className="field">
-              <span className="field-label">Рабочие дни (в остальные оклад не капает)</span>
+              <span className="field-label">Рабочие дни недели</span>
               <div className="weekdays">
                 {WEEKDAYS.map((d, i) => (
                   <button type="button" key={d} className={(f.workDays >> i) & 1 ? 'on' : ''} onClick={() => toggleDay(i)}>
@@ -229,7 +225,7 @@ export function PayScheme({ f, setF }) {
       <div className={`pay-opt ${f.payFixed ? 'on' : ''}`}>
         <Toggle checked={f.payFixed} onChange={(v) => setF({ ...f, payFixed: v })} label="Фиксированный оклад" hint="Капает каждый рабочий день" />
         {f.payFixed && (
-          <Field label="Оклад в день, сом">
+          <Field label="Оклад за смену, сом">
             <MoneyInput value={f.dailyRate} onChange={set('dailyRate')} />
           </Field>
         )}

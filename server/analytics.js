@@ -2,7 +2,7 @@ import { db } from './db.js';
 import { getSettings } from './settings.js';
 import { addDays, dayStartMs, daysBetween, dowOf, local, today as todayIn } from './time.js';
 import { fromCents } from './util.js';
-import { payrollFor, ratePerSecond } from './payroll.js';
+import { payrollFor, todayRate } from './payroll.js';
 import { prevRange } from './rating.js';
 
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -223,6 +223,7 @@ export function todayFor(user) {
   const { tz } = getSettings();
   const t = todayIn(tz);
   const p = payrollFor(user, t, t);
+  const rate = todayRate(user);
   return {
     date: t,
     profit: fromCents(p.profit),
@@ -231,53 +232,33 @@ export function todayFor(user) {
     percentPay: fromCents(p.percent),
     earned: fromCents(p.accrued),
     goal: fromCents(user.daily_goal),
-    ratePerSecond: fromCents(ratePerSecond(user)),
+    work: rate > 0 || p.workDays + p.pendingDays > 0,
+    rate: fromCents(user.pay_fixed === 0 ? 0 : rate),
+    filled: p.workDays > 0,
+    pending: p.pendingDays > 0,
   };
 }
 
-// Живая доска администратора: кто онлайн, когда было последнее поступление.
+// Доска администратора на сегодня: кто на смене и заполнена ли прибыль.
 export function computeLive() {
-  const { tz, idleMinutes, teamDailyGoal } = getSettings();
+  const { tz, teamDailyGoal } = getSettings();
   const t = todayIn(tz);
-  const startIso = new Date(dayStartMs(t, tz)).toISOString();
-  const now = Date.now();
   const users = db.prepare("SELECT * FROM users WHERE role = 'operator' AND deleted_at IS NULL AND active = 1 ORDER BY name COLLATE NOCASE").all();
   const rows = users.map((u) => {
-    const seen = db
-      .prepare('SELECT last_seen_at, last_page FROM ext_tokens WHERE user_id = ? AND last_seen_at IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1')
-      .get(u.id);
     const last = db.prepare('SELECT MAX(at) AS at FROM profit_events WHERE user_id = ?').get(u.id).at;
-    const today = todayFor(u);
-    const online = seen ? now - Date.parse(seen.last_seen_at) < 3 * 60000 : false;
-    // Простой: расширение онлайн, но прибыли нет дольше порога (считаем от последнего поступления или начала дня).
-    const since = last && last > startIso ? Date.parse(last) : Date.parse(startIso);
-    const idle = Math.floor((now - since) / 60000);
-    return {
-      userId: u.id,
-      name: u.name,
-      online,
-      lastSeen: seen?.last_seen_at ?? null,
-      page: seen ? hostOf(seen.last_page) : '',
-      lastEventAt: last,
-      idleMinutes: idle,
-      idleAlert: online && idle >= idleMinutes,
-      ...today,
-    };
+    return { userId: u.id, name: u.name, lastEventAt: last, ...todayFor(u) };
   });
   const profit = rows.reduce((s, r) => s + r.profit, 0);
   return {
     date: t,
     tz,
-    idleMinutes,
-    team: { profit: round2(profit), goal: fromCents(teamDailyGoal), online: rows.filter((r) => r.online).length, earned: round2(rows.reduce((s, r) => s + r.earned, 0)) },
+    team: {
+      profit: round2(profit),
+      goal: fromCents(teamDailyGoal),
+      onShift: rows.filter((r) => r.work).length,
+      filled: rows.filter((r) => r.filled).length,
+      earned: round2(rows.reduce((s, r) => s + r.earned, 0)),
+    },
     rows,
   };
-}
-
-function hostOf(url) {
-  try {
-    return new URL(url).host;
-  } catch {
-    return '';
-  }
 }

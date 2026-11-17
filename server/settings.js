@@ -6,6 +6,12 @@ const DEFAULTS = {
   teamDailyGoal: 0,
   windowHours: 3,
   idleMinutes: 45,
+  // Выдача зарплаты (см. payday.js).
+  payMode: 'none',
+  payWeekday: 4,
+  payMonthDay: 1,
+  payMonthDay2: 15,
+  payDates: '',
 };
 
 let cache = null;

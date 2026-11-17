@@ -5,10 +5,10 @@ import { WindowCard, buildInsights } from '../../components/insights.jsx';
 import { KpdRating } from '../../components/rating.jsx';
 
 const TABS = [
-  { value: 'money', label: '💰 Деньги' },
-  { value: 'days', label: '📅 По дням' },
-  { value: 'time', label: '⏰ По времени' },
-  { value: 'team', label: '👥 Сотрудники' },
+  { value: 'money', label: 'Деньги' },
+  { value: 'days', label: 'По дням' },
+  { value: 'time', label: 'По времени' },
+  { value: 'team', label: 'Сотрудники' },
 ];
 
 export function AdminAnalytics() {

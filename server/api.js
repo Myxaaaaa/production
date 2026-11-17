@@ -17,9 +17,9 @@ import { snapshot } from './backup.js';
 import { computeAnalytics, computeLive, publicEvent, recentEvents, todayFor } from './analytics.js';
 import { balanceFor, exportPay, payrollFor, scheduleFor } from './payroll.js';
 import { computeMoney, computeRating, streakFor } from './rating.js';
-import { addProfit, effectivePercent, effectiveRate } from './events.js';
-import { extensionZip, hashToken, newToken } from './ext.js';
+import { addProfit, effectivePercent, effectiveRate, setDayProfit } from './events.js';
 import { getSettings, setSettings } from './settings.js';
+import { PAY_MODES, parseDates, paydayInfo } from './payday.js';
 import { addDays, dayStartMs, daysBetween, isDate, today as todayIn, validTz } from './time.js';
 import { HttpError, bad, fromCents, nowIso, toCents, toIso, toId, toNumber, toText } from './util.js';
 
@@ -129,26 +129,6 @@ api.post('/auth/password', async (req, res) => {
 
 /* ---------- Сотрудник ---------- */
 
-function extStatus(userId) {
-  const tokens = db
-    .prepare('SELECT id, label, created_at, last_seen_at, last_page, last_reading FROM ext_tokens WHERE user_id = ? ORDER BY created_at DESC')
-    .all(userId);
-  const lastSeen = tokens.reduce((m, t) => (t.last_seen_at && (!m || t.last_seen_at > m) ? t.last_seen_at : m), null);
-  return {
-    connected: tokens.length > 0,
-    online: lastSeen ? Date.now() - Date.parse(lastSeen) < 3 * 60000 : false,
-    lastSeen,
-    tokens: tokens.map((t) => ({
-      id: t.id,
-      label: t.label,
-      createdAt: t.created_at,
-      lastSeen: t.last_seen_at,
-      page: t.last_page,
-      reading: fromCents(t.last_reading),
-    })),
-  };
-}
-
 api.get('/me/home', (req, res) => {
   const u = req.user;
   const b = balanceFor(u);
@@ -168,7 +148,10 @@ api.get('/me/home', (req, res) => {
     })(),
     events: recentEvents({ userId: u.id, limit: 15 }),
     streak: streakFor(u.id),
-    ext: extStatus(u.id),
+    payday: (() => {
+      const p = paydayInfo(1);
+      return { text: p.text, next: p.next[0] ?? null };
+    })(),
   });
 });
 
@@ -233,6 +216,19 @@ api.post('/me/profit', (req, res) => {
   res.status(201).json(publicEvent(e));
 });
 
+// Сотрудник заполняет прибыль за свою смену (сегодня или за последние 7 дней) — после этого начисляется оклад.
+api.put('/me/day-profit', (req, res) => {
+  const b = req.body ?? {};
+  const t = today();
+  const date = b.date || t;
+  if (!isDate(date)) throw bad('Неверная дата');
+  if (date > t) throw bad('Нельзя заполнить прибыль за будущий день');
+  if (date < addDays(t, -7)) throw bad('Прибыль старше недели заполняет администратор');
+  const amount = toCents(b.amount, 'Прибыль', { min: 0, max: 1e10 });
+  const note = toText(b.note, 'Комментарий', { max: 200 });
+  res.json(setDayProfit({ user: req.user, date, amount, note, source: 'manual', by: req.user.id }));
+});
+
 // Сотрудник может отменить свою ручную запись в течение 15 минут.
 api.delete('/me/profit/:id', (req, res) => {
   const e = getEvent(toId(req.params.id));
@@ -242,32 +238,6 @@ api.delete('/me/profit/:id', (req, res) => {
   }
   db.prepare('DELETE FROM profit_events WHERE id = ?').run(e.id);
   res.json({ ok: true });
-});
-
-/* ---------- Подключение расширения ---------- */
-
-api.get('/me/ext', (req, res) => res.json(extStatus(req.user.id)));
-
-api.post('/me/ext', (req, res) => {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM ext_tokens WHERE user_id = ?').get(req.user.id).c;
-  if (count >= 5) throw bad('Подключено уже 5 браузеров — отключите лишние');
-  const label = toText(req.body?.label, 'Название', { max: 60 }) || 'Браузер';
-  const token = newToken();
-  db.prepare('INSERT INTO ext_tokens (user_id, token_hash, label) VALUES (?, ?, ?)').run(req.user.id, hashToken(token), label);
-  const origin = `${req.protocol}://${req.get('host')}`;
-  res.status(201).json({ code: `${origin}#${token}` });
-});
-
-api.delete('/me/ext/:id', (req, res) => {
-  const r = db.prepare('DELETE FROM ext_tokens WHERE id = ? AND user_id = ?').run(toId(req.params.id), req.user.id);
-  if (!r.changes) throw new HttpError(404, 'Не найдено');
-  res.json({ ok: true });
-});
-
-api.get('/ext-package', (req, res) => {
-  res.set('Content-Type', 'application/zip');
-  res.set('Content-Disposition', 'attachment; filename="smeny-extension.zip"');
-  res.send(extensionZip());
 });
 
 /* ---------- Уведомления ---------- */
@@ -319,7 +289,7 @@ api.use('/admin', requireAdmin, admin);
 /* ---------- Настройки ---------- */
 
 function publicSettings(s) {
-  return { tz: s.tz, teamDailyGoal: fromCents(s.teamDailyGoal), windowHours: s.windowHours, idleMinutes: s.idleMinutes };
+  return { tz: s.tz, teamDailyGoal: fromCents(s.teamDailyGoal), windowHours: s.windowHours };
 }
 
 admin.get('/settings', (req, res) => res.json(publicSettings(getSettings())));
@@ -333,8 +303,27 @@ admin.put('/settings', (req, res) => {
   }
   if (b.teamDailyGoal !== undefined) patch.teamDailyGoal = toCents(b.teamDailyGoal, 'Цель команды', { min: 0, max: 1e10 });
   if (b.windowHours !== undefined) patch.windowHours = toNumber(b.windowHours, 'Окно, часов', { min: 1, max: 8 });
-  if (b.idleMinutes !== undefined) patch.idleMinutes = toNumber(b.idleMinutes, 'Порог простоя', { min: 5, max: 600 });
   res.json(publicSettings(setSettings(patch)));
+});
+
+// Режим выдачи зарплаты.
+admin.get('/payday', (req, res) => res.json(paydayInfo()));
+
+admin.put('/payday', (req, res) => {
+  const b = req.body ?? {};
+  if (!PAY_MODES.includes(b.mode)) throw bad('Выберите режим выдачи');
+  const patch = { payMode: b.mode };
+  if (b.weekday !== undefined) patch.payWeekday = toNumber(b.weekday, 'День недели', { min: 0, max: 6 }) | 0;
+  if (b.monthDay !== undefined) patch.payMonthDay = toNumber(b.monthDay, 'Число месяца', { min: 1, max: 31 }) | 0;
+  if (b.monthDay2 !== undefined) patch.payMonthDay2 = toNumber(b.monthDay2, 'Второе число', { min: 1, max: 31 }) | 0;
+  if (b.dates !== undefined) {
+    const dates = parseDates(Array.isArray(b.dates) ? b.dates.join(',') : b.dates);
+    if (dates.length > 366) throw bad('Слишком много дат');
+    patch.payDates = dates.join(',');
+  }
+  if (b.mode === 'dates' && !(patch.payDates ?? getSettings().payDates)) throw bad('Отметьте в календаре хотя бы один день выдачи');
+  setSettings(patch);
+  res.json(paydayInfo());
 });
 
 /* ---------- Сотрудники ---------- */
@@ -379,12 +368,7 @@ function setRate(userId, fromDate, rate, by) {
 
 admin.get('/users', (req, res) => {
   const rows = db.prepare("SELECT * FROM users WHERE deleted_at IS NULL ORDER BY role = 'admin', name COLLATE NOCASE").all();
-  res.json(
-    rows.map((u) => {
-      const ext = extStatus(u.id);
-      return { ...publicUser(u), ext: { connected: ext.connected, online: ext.online, lastSeen: ext.lastSeen } };
-    })
-  );
+  res.json(rows.map(publicUser));
 });
 
 admin.post('/users', async (req, res) => {
@@ -651,6 +635,40 @@ admin.post('/payouts', (req, res) => {
   res.status(201).json(publicPayout(db.prepare('SELECT p.*, u.name AS user_name FROM payouts p JOIN users u ON u.id = p.user_id WHERE p.id = ?').get(id)));
 });
 
+// Выплатить всю сумму к выплате сразу нескольким сотрудникам (или всем, у кого есть долг).
+admin.post('/payouts/bulk', (req, res) => {
+  const b = req.body ?? {};
+  const date = b.date || today();
+  if (!isDate(date)) throw bad('Неверная дата');
+  const note = toText(b.note, 'Комментарий', { max: 200 }) || 'Зарплата';
+  const ids = b.userIds === 'all' ? null : Array.isArray(b.userIds) ? b.userIds.map((x) => toId(x)) : null;
+  if (b.userIds !== 'all' && (!ids || !ids.length)) throw bad('Выберите сотрудников');
+  const users = db
+    .prepare("SELECT * FROM users WHERE role = 'operator' AND deleted_at IS NULL")
+    .all()
+    .filter((u) => !ids || ids.includes(u.id));
+  const done = tx(() => {
+    const out = [];
+    for (const u of users) {
+      const amount = Math.floor(balanceFor(u).balance);
+      if (amount <= 0) continue;
+      db.prepare('INSERT INTO payouts (user_id, amount, date, note, created_by) VALUES (?, ?, ?, ?, ?)').run(u.id, amount, date, note, req.user.id);
+      if (b.notify !== false) {
+        const sum = new Intl.NumberFormat('ru-RU').format(fromCents(amount));
+        db.prepare("INSERT INTO notifications (kind, title, body, target_user_id, created_by) VALUES ('payday', ?, ?, ?, ?)").run(
+          `Выплачено ${sum} сом`,
+          note,
+          u.id,
+          req.user.id
+        );
+      }
+      out.push({ userId: u.id, name: u.name, amount: fromCents(amount) });
+    }
+    return out;
+  });
+  res.status(201).json({ count: done.length, total: Math.round(done.reduce((s, x) => s + x.amount, 0) * 100) / 100, paid: done });
+});
+
 admin.delete('/payouts/:id', (req, res) => {
   const r = db.prepare('DELETE FROM payouts WHERE id = ?').run(toId(req.params.id));
   if (!r.changes) throw new HttpError(404, 'Запись не найдена');
@@ -684,6 +702,18 @@ admin.put('/days', (req, res) => {
     }
   });
   res.json({ ok: true, count: dates.length });
+});
+
+// Администратор заполняет прибыль сотрудника за любой прошедший день.
+admin.put('/day-profit', (req, res) => {
+  const b = req.body ?? {};
+  const user = getUser(toId(b.userId, 'Выберите сотрудника'));
+  if (!user) throw bad('Сотрудник не найден');
+  if (!isDate(b.date)) throw bad('Неверная дата');
+  if (b.date > todayIn(tz())) throw bad('Нельзя заполнить прибыль за будущий день');
+  const amount = toCents(b.amount, 'Прибыль', { min: -1e10, max: 1e10 });
+  const note = toText(b.note, 'Комментарий', { max: 200 });
+  res.json(setDayProfit({ user, date: b.date, amount, note, source: 'admin', by: req.user.id }));
 });
 
 admin.get('/schedule', (req, res) => {

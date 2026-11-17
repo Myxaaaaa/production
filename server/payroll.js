@@ -1,10 +1,11 @@
 import { db } from './db.js';
 import { getSettings } from './settings.js';
-import { addDays, dayFraction, dayStartMs, dowOf, local, today as todayIn } from './time.js';
+import { addDays, dayStartMs, dowOf, local, today as todayIn } from './time.js';
 import { fromCents } from './util.js';
 
-// Зарплата считается «на лету»:
-//   каждый рабочий день капает дневной оклад (сегодняшний — пропорционально прошедшему времени),
+// Зарплата:
+//   за каждый рабочий день — оклад за смену, но только когда за этот день заполнена прибыль
+//   (пока прибыль не внесена, день «ждёт заполнения» и оклад не начислен),
 //   плюс % от каждого поступления прибыли (процент зафиксирован в момент поступления),
 //   плюс бонусы, минус штрафы. Баланс = всё начисленное − выплаты.
 
@@ -31,6 +32,17 @@ export function dayOverrides(userId, from, to) {
   return m;
 }
 
+// Дни, за которые прибыль уже заполнена: есть отметка или хотя бы одно поступление.
+export function filledDays(userId, from, to, tz) {
+  const set = new Set(db.prepare('SELECT date FROM day_reports WHERE user_id = ? AND date >= ? AND date <= ?').all(userId, from, to).map((r) => r.date));
+  for (const e of db
+    .prepare('SELECT at FROM profit_events WHERE user_id = ? AND at >= ? AND at < ?')
+    .all(userId, isoAt(from, tz), isoAt(addDays(to, 1), tz))) {
+    set.add(local(Date.parse(e.at), tz).date);
+  }
+  return set;
+}
+
 export function isWorkDay(user, date, overrides) {
   const o = overrides.get(date);
   if (o) return o.kind === 'work';
@@ -40,20 +52,19 @@ export function isWorkDay(user, date, overrides) {
 // Расчёт по одному сотруднику за период [from, to] (включительно, локальные даты). Всё в тыйынах.
 export function payrollFor(user, from, to, { breakdown = false } = {}) {
   const { tz } = getSettings();
-  const now = Date.now();
   const today = todayIn(tz);
-  const frac = dayFraction(tz, now);
   const timeline = rateTimeline(user.id);
   const overrides = dayOverrides(user.id, from, to);
+  const filled = filledDays(user.id, from, to, tz);
   const days = new Map();
   const day = (d) => {
-    if (!days.has(d)) days.set(d, { date: d, work: false, off: null, base: 0, profit: 0, percent: 0, bonuses: 0, fines: 0, corrections: 0, events: 0 });
+    if (!days.has(d)) days.set(d, { date: d, work: false, off: null, filled: false, pending: false, base: 0, profit: 0, percent: 0, bonuses: 0, fines: 0, corrections: 0, events: 0 });
     return days.get(d);
   };
 
-  const r = { workDays: 0, base: 0, profit: 0, percent: 0, legacy: 0, bonuses: 0, fines: 0, corrections: 0, paid: 0, events: 0 };
+  const r = { workDays: 0, pendingDays: 0, pendingBase: 0, base: 0, profit: 0, percent: 0, legacy: 0, bonuses: 0, fines: 0, corrections: 0, paid: 0, events: 0 };
 
-  // Дневной оклад.
+  // Оклад за смену — только за дни с заполненной прибылью.
   let endDate = to < today ? to : today;
   if (user.deleted_at) {
     const del = local(Date.parse(user.deleted_at), tz).date;
@@ -64,13 +75,19 @@ export function payrollFor(user, from, to, { breakdown = false } = {}) {
     for (let d = start; d <= endDate; d = addDays(d, 1)) {
       const work = isWorkDay(user, d, overrides);
       const o = overrides.get(d);
-      if (breakdown) Object.assign(day(d), { work, off: o && o.kind !== 'work' ? o.kind : null, override: o?.kind ?? null });
+      const done = filled.has(d);
+      if (breakdown) Object.assign(day(d), { work, filled: done, off: o && o.kind !== 'work' ? o.kind : null, override: o?.kind ?? null });
       if (!work) continue;
       const rate = rateAt(timeline, d);
-      const amount = d === today ? rate * frac : rate;
-      r.workDays += d === today ? frac : 1;
-      r.base += amount;
-      if (breakdown) day(d).base += amount;
+      if (!done) {
+        r.pendingDays++;
+        r.pendingBase += rate;
+        if (breakdown) day(d).pending = true;
+        continue;
+      }
+      r.workDays++;
+      r.base += rate;
+      if (breakdown) day(d).base += rate;
     }
   }
   if (breakdown) {
@@ -79,6 +96,7 @@ export function payrollFor(user, from, to, { breakdown = false } = {}) {
       const o = overrides.get(d);
       const x = day(d);
       x.override = o?.kind ?? null;
+      x.filled = filled.has(d);
       if (!x.work && !x.off) {
         if (o && o.kind !== 'work') x.off = o.kind;
         else if (!user.pay_start || d < user.pay_start) x.off = 'before';
@@ -151,19 +169,20 @@ export function balanceFor(user) {
   return { accrued: r.accrued, paid: paidAll, balance: r.accrued - paidAll };
 }
 
-// Сколько копеек в секунду капает сейчас (0, если сегодня выходной).
-export function ratePerSecond(user) {
+// Оклад за сегодняшнюю смену (0, если сегодня не рабочий день).
+export function todayRate(user) {
   const { tz } = getSettings();
   const t = todayIn(tz);
   if (!user.pay_start || user.pay_start > t) return 0;
   if (!isWorkDay(user, t, dayOverrides(user.id, t, t))) return 0;
-  const len = (dayStartMs(addDays(t, 1), tz) - dayStartMs(t, tz)) / 1000;
-  return rateAt(rateTimeline(user.id), t) / len;
+  return rateAt(rateTimeline(user.id), t);
 }
 
 export function exportPay(r) {
   const out = {
-    workDays: Math.round(r.workDays * 100) / 100,
+    workDays: r.workDays,
+    pendingDays: r.pendingDays,
+    pendingBase: fromCents(r.pendingBase),
     base: fromCents(r.base + r.legacy),
     profit: fromCents(r.profit),
     percentPay: fromCents(r.percent),
@@ -178,6 +197,8 @@ export function exportPay(r) {
     out.days = r.days.map((d) => ({
       date: d.date,
       work: d.work,
+      filled: d.filled,
+      pending: d.pending,
       off: d.off,
       override: d.override ?? null,
       events: d.events,
@@ -217,6 +238,8 @@ export function scheduleFor(user, from, to) {
       kind: o?.kind ?? null,
       note: o?.note ?? '',
       before,
+      filled: f ? f.filled : false,
+      pending: f ? f.pending : false,
       profit: f ? fromCents(f.profit) : 0,
       total: f ? fromCents(f.total) : 0,
     });

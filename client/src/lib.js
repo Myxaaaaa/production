@@ -193,8 +193,8 @@ export const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 export function payModeText(u) {
   const fixed = u.payFixed !== false;
   const pct = u.payPercent !== false;
-  if (fixed && pct) return `${money(u.dailyRate)}/день + ${num(u.percent, 2)}%`;
-  if (fixed) return `только оклад ${money(u.dailyRate)}/день`;
+  if (fixed && pct) return `${money(u.dailyRate)} за смену + ${num(u.percent, 2)}%`;
+  if (fixed) return `только оклад ${money(u.dailyRate)} за смену`;
   if (pct) return `только ${num(u.percent, 2)}% с прибыли`;
   return 'без оклада и %';
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, useApi, money, todayKey, plural, useTicker, dayLabel, ago, payModeText } from '../lib.js';
+import { api, useApi, money, todayKey, addDays, plural, dayLabel, payModeText } from '../lib.js';
 import { ErrorBox, Icon, Kpi, Loading, MoneyInput, Progress, Section, useToast } from '../components/ui.jsx';
 import { EventFeed } from '../components/insights.jsx';
 import { useUnread } from '../App.jsx';
@@ -28,21 +28,12 @@ export function PaydayBanner() {
 
 export function HomePage() {
   const toast = useToast();
-  const { data, error, loading, reload } = useApi('/me/home', { refreshMs: 20000 });
-  const [fetchedAt, setFetchedAt] = useState(0);
-  const [lastData, setLastData] = useState(null);
-  if (data !== lastData) {
-    setLastData(data);
-    setFetchedAt(Date.now());
-  }
+  const { data, error, loading, reload } = useApi('/me/home', { refreshMs: 60000 });
   const t = data?.today;
-  const earned = useTicker(t?.earned ?? 0, t?.ratePerSecond ?? 0, fetchedAt);
-  const balance = useTicker(data?.balance.balance ?? 0, t?.ratePerSecond ?? 0, fetchedAt);
 
   if (loading && !data) return <Loading />;
   if (!data) return <ErrorBox error={error} onRetry={reload} />;
 
-  const perHour = (t.ratePerSecond || 0) * 3600;
   const goalLeft = t.goal > 0 ? Math.max(0, t.goal - t.profit) : 0;
   const hour = new Date().getHours();
   const greeting = hour < 5 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер';
@@ -67,12 +58,16 @@ export function HomePage() {
           </h1>
         </div>
         <div className="greet-chips">
+          {data.payday?.next && (
+            <span className="chip" title={`Зарплата выдаётся ${data.payday.text}`}>
+              💵 Зарплата {data.payday.next === t.date ? 'сегодня' : dayLabel(data.payday.next, { weekday: 'short', day: 'numeric', month: 'short' })}
+            </span>
+          )}
           {data.streak >= 2 && (
             <span className="chip chip-fire" title="Дней подряд с прибылью">
               🔥 {data.streak} {plural(data.streak, 'день', 'дня', 'дней')} подряд
             </span>
           )}
-          <ExtChip ext={data.ext} />
         </div>
       </div>
       {t.goal > 0 && t.profit >= t.goal && <Confetti day={t.date} />}
@@ -83,18 +78,16 @@ export function HomePage() {
           <div className="hero-label">
             <Icon name="drop" size={16} /> Заработано сегодня
           </div>
-          <div className="hero-value">{money(Math.floor(earned * 100) / 100)}</div>
+          <div className="hero-value">{money(t.earned)}</div>
           <div className="hero-meta">
-            {!data.user.payFixed ? (
-              <span>Оклад выключен — заработок идёт только с % от прибыли</span>
-            ) : perHour > 0 ? (
-              <span className="drip">
-                <i /> капает {money(Math.round(perHour * 100) / 100)} в час
-              </span>
+            {!t.work ? (
+              <span>Сегодня выходной</span>
+            ) : t.pending ? (
+              <span>Заполните прибыль за смену — тогда начислится оклад {money(t.rate)}</span>
             ) : (
-              <span>Сегодня оклад не начисляется (выходной)</span>
+              <span>✅ Прибыль за смену заполнена</span>
             )}
-            {data.user.payFixed && <span>оклад {money(Math.round((t.base + (earned - t.earned)) * 100) / 100)}</span>}
+            {data.user.payFixed && t.filled && <span>оклад {money(t.base)}</span>}
             {(data.user.payPercent || t.percentPay > 0) && <span>% от прибыли {money(t.percentPay)}</span>}
           </div>
         </section>
@@ -121,8 +114,12 @@ export function HomePage() {
         </section>
       </div>
 
+      <Section title={t.pending ? '⏳ Заполните прибыль за смену' : 'Прибыль за смену'}>
+        <DayProfit today={t} onDone={reload} />
+      </Section>
+
       <div className="kpis">
-        <Kpi label="К выплате" icon="wallet" tone="accent" value={money(Math.floor(balance * 100) / 100)} sub={data.lastPayout ? `последняя выплата ${money(data.lastPayout.amount)} · ${dayLabel(data.lastPayout.date, { day: 'numeric', month: 'short' })}` : 'выплат ещё не было'} />
+        <Kpi label="К выплате" icon="wallet" tone="accent" value={money(data.balance.balance)} sub={data.lastPayout ? `последняя выплата ${money(data.lastPayout.amount)} · ${dayLabel(data.lastPayout.date, { day: 'numeric', month: 'short' })}` : 'выплат ещё не было'} />
         <Kpi label="За 7 дней" icon="calendar" value={money(data.week.accrued)} sub={`прибыль ${money(data.week.profit)}`} />
         <Kpi label="За месяц" icon="coins" value={money(data.month.accrued)} sub={`прибыль ${money(data.month.profit)}`} />
         <Link to="/advances" className="kpi kpi-link">
@@ -134,58 +131,31 @@ export function HomePage() {
         </Link>
       </div>
 
-      <div className="two-col">
-        <Section title="Изменения прибыли" aside={<Link to="/earnings" className="small">Все</Link>}>
-          <div className="card flush">
-            <EventFeed events={data.events} onUndo={undo} empty="Как только на рабочем сайте изменится сумма, она появится здесь" />
-          </div>
-        </Section>
-        <Section title="Добавить вручную">
-          <QuickAdd onDone={reload} />
-        </Section>
-      </div>
+      <Section title="Последние записи прибыли" aside={<Link to="/earnings" className="small">Вся зарплата</Link>}>
+        <div className="card flush">
+          <EventFeed events={data.events} onUndo={undo} empty="Записей пока нет — заполните прибыль за смену" />
+        </div>
+      </Section>
     </div>
   );
 }
 
-function ExtChip({ ext }) {
-  if (ext.online)
-    return (
-      <Link to="/profile" className="chip chip-live">
-        <i /> Расширение работает
-      </Link>
-    );
-  if (ext.connected)
-    return (
-      <Link to="/profile" className="chip chip-warn" title={`Последний сигнал ${ago(ext.lastSeen)}`}>
-        <Icon name="pause" size={14} /> Рабочая страница не открыта
-      </Link>
-    );
-  return (
-    <Link to="/profile" className="chip">
-      <Icon name="puzzle" size={14} /> Подключить расширение
-    </Link>
-  );
-}
-
-function QuickAdd({ onDone }) {
+// Сотрудник вносит итог прибыли за смену (сегодня или за прошлые дни недели).
+// После заполнения начисляются оклад за смену и процент.
+function DayProfit({ today, onDone }) {
   const toast = useToast();
+  const [date, setDate] = useState(today.date);
   const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
     if (!amount.trim()) return;
     setBusy(true);
     try {
-      const ev = await api('/me/profit', { method: 'POST', body: { amount, note } });
+      await api('/me/day-profit', { method: 'PUT', body: { date, amount } });
       setAmount('');
-      setNote('');
       onDone();
-      toast(`Добавлено ${money(ev.amount)}`, 'ok', {
-        label: 'Отменить',
-        run: () => api(`/me/profit/${ev.id}`, { method: 'DELETE' }).then(onDone, (err) => toast(err.message, 'error')),
-      });
+      toast(`Прибыль за ${date === today.date ? 'сегодня' : dayLabel(date, { day: 'numeric', month: 'long' })} сохранена`);
     } catch (err) {
       toast(err.message, 'error');
     } finally {
@@ -194,14 +164,16 @@ function QuickAdd({ onDone }) {
   };
   return (
     <form className="card form" onSubmit={submit}>
-      <p className="muted small">Если прибыль пришла мимо рабочего сайта (наличные, перевод) — внесите её здесь. Минус — для исправления ошибки.</p>
-      <div className="quick">
-        <MoneyInput value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Сумма, сом" aria-label="Сумма" />
-        <button className="btn btn-primary" disabled={busy || !amount.trim()}>
-          <Icon name="plus" size={18} /> Добавить
-        </button>
+      <p className="muted small">
+        Впишите <b>итог прибыли за смену</b>. Если за день уже что-то вносили — сумма заменится на новую. Нет прибыли — впишите 0.
+      </p>
+      <div className="quick quick-2">
+        <input type="date" value={date} max={today.date} min={addDays(today.date, -7)} onChange={(e) => setDate(e.target.value)} aria-label="День" />
+        <MoneyInput value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Прибыль, сом" aria-label="Прибыль" />
       </div>
-      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Комментарий (необязательно)" maxLength={200} />
+      <button className="btn btn-primary btn-block" disabled={busy || !amount.trim()}>
+        Сохранить прибыль
+      </button>
     </form>
   );
 }

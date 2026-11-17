@@ -3169,3 +3169,166 @@ li.clickable:hover {
   border-top: 1px solid var(--line);
   font-weight: 650;
 }
+
+/* ============ Простой вид: меньше украшений, всё плоское ============ */
+:root {
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow: none;
+}
+.hero {
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.hero::after {
+  display: none;
+}
+.hero-label {
+  color: var(--muted);
+  opacity: 1;
+}
+.hero-value {
+  color: var(--accent-ink);
+}
+.hero-meta {
+  color: var(--text-2);
+  opacity: 1;
+}
+.kpi-accent,
+.kpi-warn {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.kpi-accent .kpi-label,
+.kpi-warn .kpi-label {
+  color: var(--muted);
+}
+.kpi-accent .kpi-value {
+  color: var(--accent-ink);
+}
+.kpi-warn .kpi-value {
+  color: var(--warn);
+}
+.kpi-value {
+  font-weight: 700;
+}
+
+/* Верхняя панель на телефоне: колокольчик + профиль */
+.topbar-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.topbar-end .nav-icon {
+  position: relative;
+}
+
+/* График: смена прошла, прибыль не заполнена */
+.cal-day.pend {
+  box-shadow: inset 0 0 0 2px var(--warn);
+}
+.cal-wait {
+  font-size: 12px;
+}
+.day-profit {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.day-profit .quick input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Выдача зарплаты */
+.payday-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.payday-card.is-today {
+  border-color: var(--warn);
+}
+.payday-main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.payday-icon {
+  font-size: 22px;
+  line-height: 1.2;
+}
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-color: var(--warn);
+}
+.bulk-bar.done {
+  border-color: var(--line);
+  color: var(--good);
+}
+.bulk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.check-col {
+  width: 36px;
+  padding-right: 0 !important;
+}
+.check-col input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.row-picked td {
+  background: var(--accent-soft);
+}
+.bulk-list {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.bulk-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+}
+.dates-picker {
+  display: grid;
+  gap: 10px;
+}
+.cal-small .cal-day {
+  min-height: 44px;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.cal-day.pay-on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.quick-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.quick-2 input {
+  min-width: 0;
+  width: 100%;
+}

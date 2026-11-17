@@ -1,5 +1,4 @@
-import { useApi, usePeriod, periodQuery, money, num, dayLabel, weekday, todayKey, signed } from '../lib.js';
-import { ScheduleCalendar } from '../components/schedule.jsx';
+import { useApi, usePeriod, periodQuery, money, num, dayLabel, weekday, todayKey, signed, plural } from '../lib.js';
 import { Empty, ErrorBox, Kpi, Loading, PageHead, PeriodPicker, Section } from '../components/ui.jsx';
 
 export const OFF = {
@@ -33,7 +32,7 @@ export function DayTable({ days }) {
                   <span className={`day-num ${d.date === today ? 'today' : ''}`}>{Number(d.date.slice(8))}</span>
                   <div>
                     <div>{weekday(d.date)}</div>
-                    {d.off ? <span className={`tag tag-${OFF[d.off]?.tone}`}>{OFF[d.off]?.label}</span> : d.date === today ? <span className="tag tag-accent">сегодня, капает</span> : null}
+                    {d.off ? <span className={`tag tag-${OFF[d.off]?.tone}`}>{OFF[d.off]?.label}</span> : d.pending ? <span className="tag tag-warn">ждёт прибыль</span> : null}
                   </div>
                 </div>
               </td>
@@ -59,7 +58,7 @@ export function EarningsPage() {
 
   return (
     <div className="page">
-      <PageHead title="Мой заработок" subtitle="Оклад капает каждый рабочий день, процент — с каждого поступления прибыли">
+      <PageHead title="Мой заработок" subtitle="Оклад за смену и процент начисляются, когда заполнена прибыль за день">
         <PeriodPicker value={period} onChange={setPeriod} />
       </PageHead>
       <ErrorBox error={error} onRetry={reload} />
@@ -68,8 +67,8 @@ export function EarningsPage() {
       ) : data ? (
         <>
           <div className="kpis">
-            <Kpi label="Начислено за период" icon="coins" tone="accent" value={money(t.accrued)} sub={`${num(t.workDays, 1)} раб. дн. · прибыль ${money(t.profit)}`} />
-            <Kpi label="Оклад" icon="calendar" value={money(t.base)} sub={data.user.payFixed ? `${money(data.user.dailyRate)} в день` : 'оклад выключен'} />
+            <Kpi label="Начислено за период" icon="coins" tone="accent" value={money(t.accrued)} sub={`${t.workDays} ${plural(t.workDays, 'смена', 'смены', 'смен')} · прибыль ${money(t.profit)}`} />
+            <Kpi label="Оклад" icon="calendar" value={money(t.base)} sub={!data.user.payFixed ? 'оклад выключен' : t.pendingDays ? `ещё ${money(t.pendingBase)} — после заполнения прибыли` : `${money(data.user.dailyRate)} за смену`} />
             <Kpi label="% от прибыли" icon="drop" value={money(t.percentPay)} sub={data.user.payPercent ? `${num(data.user.percent, 2)}% с каждого поступления` : '% с прибыли выключен'} />
             <Kpi label="Бонусы / штрафы" icon="gift" value={<><span className="pos">+{num(t.bonuses, 2)}</span> <span className="neg">−{num(t.fines, 2)}</span></>} sub="сом" />
             <Kpi label="Выплачено" icon="wallet" value={money(t.paid)} sub="за период" />
@@ -81,11 +80,6 @@ export function EarningsPage() {
               <DayTable days={t.days} />
             </Section>
             <div className="stack">
-              <Section title="Мой график">
-                <div className="card">
-                  <ScheduleCalendar readOnly />
-                </div>
-              </Section>
               {data.corrections?.length > 0 && (
                 <Section title="Правки администратора">
                   <ul className="card list">

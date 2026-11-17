@@ -41,8 +41,8 @@ export function AdminOverview() {
                 )
               }
             />
-            <Kpi label="Начислено сегодня" icon="coins" value={money(L.team.earned)} sub="оклады + проценты" />
-            <Kpi label="Сейчас работают" icon="zap" value={`${L.team.online} из ${L.rows.length}`} sub="открыта рабочая страница" />
+            <Kpi label="Начислено сегодня" icon="coins" value={money(L.team.earned)} sub="оклады за заполненные смены + %" />
+            <Kpi label="Прибыль заполнена" icon="check" value={`${L.team.filled} из ${L.team.onShift}`} sub="сотрудников на смене сегодня" />
             <Kpi
               label="Прибыль за месяц"
               icon="calendar"
@@ -52,7 +52,7 @@ export function AdminOverview() {
           </div>
 
           <div className="two-col wide-left">
-            <Section title="Сотрудники сейчас" aside={<span className="muted small">обновляется само</span>}>
+            <Section title="Сотрудники сегодня" aside={<Link to="/schedule" className="small">График →</Link>}>
               {L.rows.length === 0 ? (
                 <Empty icon="users">
                   Сотрудников пока нет. <Link to="/users">Добавить</Link>
@@ -60,23 +60,13 @@ export function AdminOverview() {
               ) : (
                 <ul className="card live">
                   {L.rows.map((r) => (
-                    <li key={r.userId} className={r.idleAlert ? 'idle' : ''}>
-                      <Avatar name={r.name} online={r.online} />
+                    <li key={r.userId}>
+                      <Avatar name={r.name} />
                       <div className="live-main">
                         <b>{r.name}</b>
                         <div className="muted small">
-                          {r.online ? (
-                            r.idleAlert ? (
-                              <span className="warn-text">нет прибыли уже {minutes(r.idleMinutes)}</span>
-                            ) : (
-                              <>онлайн{r.page && ` · ${r.page}`}</>
-                            )
-                          ) : r.lastSeen ? (
-                            `не в сети · был ${ago(r.lastSeen)}`
-                          ) : (
-                            'расширение не подключено'
-                          )}
-                          {r.lastEventAt && ` · последнее поступление ${time(r.lastEventAt)}`}
+                          {!r.work ? 'выходной' : r.pending ? <span className="warn-text">⏳ прибыль за смену не заполнена</span> : '✅ прибыль заполнена'}
+                          {r.lastEventAt && ` · последняя запись ${time(r.lastEventAt)}`}
                         </div>
                         {r.goal > 0 && <Progress value={r.profit} max={r.goal} />}
                       </div>

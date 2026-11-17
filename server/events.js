@@ -47,3 +47,28 @@ export function addProfit({ user, amount, at, source, reading = null, page = '',
     return db.prepare('SELECT e.*, u.name AS user_name FROM profit_events e JOIN users u ON u.id = e.user_id WHERE e.id = ?').get(id);
   });
 }
+
+const dayProfit = (userId, date, tz) =>
+  db
+    .prepare('SELECT COALESCE(SUM(amount), 0) AS s FROM profit_events WHERE user_id = ? AND at >= ? AND at < ?')
+    .get(userId, new Date(dayStartMs(date, tz)).toISOString(), new Date(dayStartMs(addDays(date, 1), tz)).toISOString()).s;
+
+// Заполнение прибыли за день: задаём итог за день. Разница записывается отдельным поступлением,
+// день отмечается заполненным — после этого начисляется оклад за смену.
+export function setDayProfit({ user, date, amount, note = '', source, by }) {
+  const { tz } = getSettings();
+  return tx(() => {
+    const current = dayProfit(user.id, date, tz);
+    const delta = amount - current;
+    if (delta !== 0) {
+      const t = todayIn(tz);
+      const at = date === t ? new Date().toISOString() : new Date(Math.min(Date.now(), dayStartMs(date, tz) + 20 * 3600000)).toISOString();
+      addProfit({ user, amount: delta, at, source, note: note || 'Прибыль за день', createdBy: by });
+    }
+    db.prepare(
+      `INSERT INTO day_reports (user_id, date, filled_by) VALUES (?, ?, ?)
+       ON CONFLICT(user_id, date) DO UPDATE SET filled_by = excluded.filled_by, filled_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`
+    ).run(user.id, date, by);
+    return { date, profit: amount / 100, delta: delta / 100 };
+  });
+}

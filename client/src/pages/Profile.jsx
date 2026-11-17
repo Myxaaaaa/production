@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, money, num, useApi } from '../lib.js';
 import { Avatar, Field, Icon, MoneyInput, PageHead, Section, useToast } from '../components/ui.jsx';
-import { ExtensionCard } from '../components/insights.jsx';
 import { useAuth } from '../App.jsx';
 
 const TZS = ['Asia/Bishkek', 'Asia/Almaty', 'Asia/Tashkent', 'Asia/Dushanbe', 'Europe/Moscow', 'Europe/Istanbul', 'Asia/Dubai', 'UTC'];
@@ -20,18 +19,13 @@ export function ProfilePage() {
           </div>
           {user.role === 'operator' && (
             <div className="muted small">
-              Оклад {money(user.dailyRate)} в день · {num(user.percent, 2)}% от прибыли
+              Оклад {money(user.dailyRate)} за смену · {num(user.percent, 2)}% от прибыли
               {user.dailyGoal > 0 && ` · цель ${money(user.dailyGoal)} в день`}
             </div>
           )}
         </div>
       </div>
 
-      {user.role === 'operator' && (
-        <Section title="Расширение">
-          <ExtensionCard />
-        </Section>
-      )}
       {user.role === 'admin' && <SettingsCard />}
       <PasswordCard />
 
@@ -77,14 +71,9 @@ function SettingsCard() {
             <MoneyInput value={f.teamDailyGoal} onChange={set('teamDailyGoal')} />
           </Field>
         </div>
-        <div className="row2">
-          <Field label="Лучшее окно, часов" hint="Длина периода для поиска самого прибыльного времени">
-            <input type="number" min="1" max="8" value={f.windowHours} onChange={set('windowHours')} />
-          </Field>
-          <Field label="Простой, минут" hint="Через сколько без прибыли подсвечивать сотрудника онлайн">
-            <input type="number" min="5" max="600" value={f.idleMinutes} onChange={set('idleMinutes')} />
-          </Field>
-        </div>
+        <Field label="Лучшее окно, часов" hint="Длина периода для поиска самого прибыльного времени">
+          <input type="number" min="1" max="8" value={f.windowHours} onChange={set('windowHours')} />
+        </Field>
         <div className="form-actions">
           <a className="btn btn-ghost" href="/api/admin/backup" download>
             <Icon name="download" size={17} /> Резервная копия базы

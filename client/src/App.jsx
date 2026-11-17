@@ -11,12 +11,13 @@ import { ProfilePage } from './pages/Profile.jsx';
 import { AdminOverview } from './pages/admin/Overview.jsx';
 import { AdminAnalytics } from './pages/admin/Analytics.jsx';
 import { AdminProfit } from './pages/admin/Profit.jsx';
-import { AdminPayroll } from './pages/admin/Payroll.jsx';
+import { AdminAdvances, AdminBonuses, AdminPayouts, AdminPayroll, AdminSchedule } from './pages/admin/Payroll.jsx';
 import { AdminUsers } from './pages/admin/Users.jsx';
 import { AdminNotify } from './pages/admin/Notify.jsx';
 import { MorePage } from './pages/admin/More.jsx';
 import { AdminRating } from './pages/admin/Rating.jsx';
 import { AdvancesPage } from './pages/Advances.jsx';
+import { MySchedulePage } from './pages/MySchedule.jsx';
 
 const AuthCtx = createContext(null);
 export const useAuth = () => useContext(AuthCtx);
@@ -76,16 +77,18 @@ function OperatorApp() {
   const notifications = useNotifications();
   const tabs = [
     { to: '/', icon: 'home', label: 'Главная', end: true },
-    { to: '/earnings', icon: 'wallet', label: 'Заработок' },
-    { to: '/stats', icon: 'chart', label: 'Аналитика' },
+    { to: '/schedule', icon: 'calendar', label: 'График' },
+    { to: '/earnings', icon: 'wallet', label: 'Зарплата' },
     { to: '/advances', icon: 'coins', label: 'Аванс' },
+    { to: '/stats', icon: 'chart', label: 'Аналитика' },
     { to: '/notifications', icon: 'bell', label: 'Сообщения', badge: notifications.unread },
   ];
   return (
     <UnreadCtx.Provider value={notifications}>
-      <Layout tabs={tabs} mobileTabs={tabs}>
+      <Layout tabs={tabs} mobileTabs={tabs.slice(0, 5)} bell={notifications.unread}>
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/schedule" element={<MySchedulePage />} />
           <Route path="/earnings" element={<EarningsPage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/advances" element={<AdvancesPage />} />
@@ -98,18 +101,23 @@ function OperatorApp() {
   );
 }
 
+// Все разделы — отдельными вкладками. На телефоне первые четыре внизу, остальное в «Ещё».
 const ADMIN_TABS = [
   { to: '/', icon: 'grid', label: 'Обзор', end: true },
-  { to: '/analytics', icon: 'chart', label: 'Аналитика' },
+  { to: '/schedule', icon: 'calendar', label: 'График' },
   { to: '/payroll', icon: 'wallet', label: 'Зарплата' },
+  { to: '/advances', icon: 'coins', label: 'Авансы' },
+  { to: '/payouts', icon: 'download', label: 'Выплаты' },
+  { to: '/bonuses', icon: 'gift', label: 'Бонусы и штрафы' },
+  { to: '/profit', icon: 'drop', label: 'Прибыль' },
+  { to: '/analytics', icon: 'chart', label: 'Аналитика' },
   { to: '/rating', icon: 'trophy', label: 'Рейтинг' },
-  { to: '/profit', icon: 'drop', label: 'Поступления' },
   { to: '/users', icon: 'users', label: 'Сотрудники' },
   { to: '/notify', icon: 'send', label: 'Рассылка' },
 ];
 
 function AdminApp() {
-  // Счётчик новых заявок на аванс — на вкладке «Зарплата».
+  // Счётчик новых заявок на аванс — на вкладке «Авансы».
   const adv = useApi('/admin/advances/pending', { refreshMs: 30000 });
   const pending = adv.data?.pending || 0;
   useEffect(() => {
@@ -117,15 +125,19 @@ function AdminApp() {
     window.addEventListener('advances:changed', on);
     return () => window.removeEventListener('advances:changed', on);
   });
-  const tabs = ADMIN_TABS.map((t) => (t.to === '/payroll' ? { ...t, badge: pending } : t));
+  const tabs = ADMIN_TABS.map((t) => (t.to === '/advances' ? { ...t, badge: pending } : t));
   const mobile = [...tabs.slice(0, 4), { to: '/more', icon: 'more', label: 'Ещё' }];
   return (
     <Layout tabs={tabs} mobileTabs={mobile}>
       <Routes>
         <Route path="/" element={<AdminOverview />} />
+        <Route path="/schedule" element={<AdminSchedule />} />
+        <Route path="/payroll" element={<AdminPayroll />} />
+        <Route path="/advances" element={<AdminAdvances />} />
+        <Route path="/payouts" element={<AdminPayouts />} />
+        <Route path="/bonuses" element={<AdminBonuses />} />
         <Route path="/analytics" element={<AdminAnalytics />} />
         <Route path="/profit" element={<AdminProfit />} />
-        <Route path="/payroll" element={<AdminPayroll />} />
         <Route path="/rating" element={<AdminRating />} />
         <Route path="/users" element={<AdminUsers />} />
         <Route path="/notify" element={<AdminNotify />} />
@@ -146,7 +158,7 @@ function Brand() {
   );
 }
 
-function Layout({ tabs, mobileTabs, children }) {
+function Layout({ tabs, mobileTabs, bell, children }) {
   const { user } = useAuth();
   return (
     <div className="shell">
@@ -168,9 +180,17 @@ function Layout({ tabs, mobileTabs, children }) {
       </aside>
       <header className="topbar">
         <Brand />
-        <Link to="/profile" aria-label="Профиль">
-          <Avatar name={user.name} size="sm" />
-        </Link>
+        <div className="topbar-end">
+          {bell !== undefined && (
+            <Link to="/notifications" className="icon-btn nav-icon" aria-label="Сообщения">
+              <Icon name="bell" />
+              {bell > 0 && <span className="badge">{bell > 99 ? '99+' : bell}</span>}
+            </Link>
+          )}
+          <Link to="/profile" aria-label="Профиль">
+            <Avatar name={user.name} size="sm" />
+          </Link>
+        </div>
       </header>
       <main className="content">{children}</main>
       <nav className="tabbar" aria-label="Разделы">
