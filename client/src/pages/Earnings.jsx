@@ -3,7 +3,8 @@ import { Empty, ErrorBox, Kpi, Loading, PageHead, PeriodPicker, Section } from '
 
 export const OFF = {
   weekend: { label: 'выходной', tone: 'muted' },
-  off: { label: 'отгул', tone: 'muted' },
+  off: { label: 'выходной', tone: 'muted' },
+  absent: { label: 'невыход', tone: 'bad' },
   sick: { label: 'больничный', tone: 'warn' },
   vacation: { label: 'отпуск', tone: 'sky' },
   before: { label: 'до начала работы', tone: 'muted' },

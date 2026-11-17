@@ -346,7 +346,7 @@ function readPay(b, current) {
   const out = {
     daily_rate: b.dailyRate !== undefined ? toCents(b.dailyRate, 'Оклад в день', { min: 0, max: 1e8 }) : (current?.daily_rate ?? 0),
     percent: b.percent !== undefined ? toNumber(b.percent, 'Процент от прибыли', { max: 100 }) : (current?.percent ?? 0),
-    work_days: b.workDays !== undefined ? toNumber(b.workDays, 'Рабочие дни', { min: 0, max: 127 }) | 0 : (current?.work_days ?? 127),
+    work_days: 127, // график без выходных по умолчанию — выходные ставятся в календаре
     daily_goal: b.dailyGoal !== undefined ? toCents(b.dailyGoal, 'Цель на день', { min: 0, max: 1e10 }) : (current?.daily_goal ?? 0),
     pay_start: current?.pay_start ?? today(),
     pay_fixed: b.payFixed !== undefined ? (b.payFixed ? 1 : 0) : (current?.pay_fixed ?? 1),
@@ -690,7 +690,7 @@ admin.put('/days', (req, res) => {
   dates = [...new Set(dates)];
   if (!dates.length || dates.length > 400 || !dates.every(isDate)) throw bad('Неверные даты');
   const kind = b.kind || null;
-  if (kind && !['off', 'sick', 'vacation', 'work'].includes(kind)) throw bad('Неверный тип дня');
+  if (kind && !['off', 'absent', 'sick', 'vacation', 'work'].includes(kind)) throw bad('Неверный тип дня');
   const note = toText(b.note, 'Комментарий', { max: 120 });
   tx(() => {
     for (const d of dates) {

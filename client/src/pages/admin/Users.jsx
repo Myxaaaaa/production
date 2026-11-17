@@ -49,10 +49,6 @@ export function AdminUsers() {
                     <dt>% прибыли</dt>
                     <dd>{u.payPercent ? `${num(u.percent, 2)}%` : <span className="muted">выключен</span>}</dd>
                   </div>
-                  <div>
-                    <dt>График</dt>
-                    <dd>{daysText(u.workDays)}</dd>
-                  </div>
                 </dl>
               )}
             </button>
@@ -167,16 +163,6 @@ function UserModal({ user, onClose, onSaved }) {
                 Применить новый % и к сегодняшним поступлениям
               </label>
             )}
-            <div className="field">
-              <span className="field-label">Рабочие дни недели</span>
-              <div className="weekdays">
-                {WEEKDAYS.map((d, i) => (
-                  <button type="button" key={d} className={(f.workDays >> i) & 1 ? 'on' : ''} onClick={() => toggleDay(i)}>
-                    {d}
-                  </button>
-                ))}
-              </div>
-            </div>
             <Field label="Оклад начисляется с" hint="Дата начала работы">
               <input type="date" value={f.payStart} onChange={set('payStart')} />
             </Field>

@@ -43,10 +43,10 @@ export function filledDays(userId, from, to, tz) {
   return set;
 }
 
+// Каждый день — смена, если администратор не поставил выходной, невыход, больничный или отпуск.
 export function isWorkDay(user, date, overrides) {
   const o = overrides.get(date);
-  if (o) return o.kind === 'work';
-  return ((user.work_days >> dowOf(date)) & 1) === 1;
+  return o ? o.kind === 'work' : true;
 }
 
 // Расчёт по одному сотруднику за период [from, to] (включительно, локальные даты). Всё в тыйынах.

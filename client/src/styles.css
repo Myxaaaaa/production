@@ -3332,3 +3332,47 @@ li.clickable:hover {
   min-width: 0;
   width: 100%;
 }
+
+/* График: каждый день — смена, статусы ставит администратор */
+.k-plan {
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink);
+}
+.k-absent {
+  background: var(--bad-soft) !important;
+  color: var(--bad);
+}
+.cal-day .cal-k {
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.kind-btn.on {
+  box-shadow: 0 0 0 2px var(--text) !important;
+}
+.sched-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+@media (min-width: 700px) {
+  .sched .cal-day {
+    min-height: 76px;
+    padding: 8px 9px 7px;
+  }
+  .sched .cal-n {
+    font-size: 15px;
+  }
+  .sched .cal-p {
+    font-size: 12.5px;
+  }
+  .sched .cal-day .cal-k {
+    font-size: 11.5px;
+  }
+}
+.cal-day.k-plan.past:not(.pend) {
+  opacity: 0.85;
+}
+.sched-head {
+  flex-wrap: wrap;
+}

@@ -3,12 +3,19 @@ import { api, useApi, addDays, todayKey, moneyShort, money, plural, dayLabel, WE
 import { Field, Icon, Loading, MoneyInput, Seg, useToast } from './ui.jsx';
 
 // Что можно поставить на день.
+// По умолчанию каждый день — смена; администратор ставит выходной, невыход, больничный или отпуск.
 export const DAY_KIND = {
-  work: { label: 'Смена', short: 'смена', cls: 'k-work', icon: '💼' },
-  off: { label: 'Выходной', short: 'вых.', cls: 'k-off', icon: '🌙' },
-  sick: { label: 'Больничный', short: 'боль.', cls: 'k-sick', icon: '🤒' },
-  vacation: { label: 'Отпуск', short: 'отп.', cls: 'k-vac', icon: '🏖️' },
+  work: { label: 'Смена', short: '', cls: 'k-plan', icon: '💼' },
+  off: { label: 'Выходной', short: 'выходной', cls: 'k-off', icon: '🌙' },
+  absent: { label: 'Невыход', short: 'невыход', cls: 'k-absent', icon: '🚫' },
+  sick: { label: 'Больничный', short: 'больничн.', cls: 'k-sick', icon: '🤒' },
+  vacation: { label: 'Отпуск', short: 'отпуск', cls: 'k-vac', icon: '🏖️' },
 };
+// Кнопки: «Смена» снимает отметку и возвращает обычную смену.
+const ACTIONS = [
+  { kind: null, ...DAY_KIND.work },
+  ...['off', 'absent', 'sick', 'vacation'].map((k) => ({ kind: k, ...DAY_KIND[k] })),
+];
 
 // Чередование смен: [рабочих, выходных].
 const PATTERNS = {
@@ -41,9 +48,9 @@ function between(a, b) {
 }
 
 function dayClass(d) {
-  if (d.kind) return DAY_KIND[d.kind].cls;
+  if (d.kind && d.kind !== 'work') return DAY_KIND[d.kind]?.cls || 'k-off';
   if (d.before) return 'k-before';
-  return d.work ? 'k-plan' : 'k-rest';
+  return 'k-plan';
 }
 
 // Календарь графика. Админ: зажмите и ведите пальцем/мышью, чтобы выделить сразу несколько дней,
@@ -193,7 +200,7 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
 
   const markSelected = (kind) => {
     const dates = [...sel].sort();
-    const label = kind ? DAY_KIND[kind].label.toLowerCase() : 'как по графику';
+    const label = kind ? DAY_KIND[kind].label.toLowerCase() : 'смена';
     save([{ dates, kind }], `${dates.length} ${plural(dates.length, 'день', 'дня', 'дней')}: ${label}`);
   };
 
@@ -244,16 +251,17 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
         <>
           <div className="sched-stats">
             <span>
-              <b>{count((d) => d.work)}</b> раб. {plural(count((d) => d.work), 'день', 'дня', 'дней')}
+              <b>{count((d) => d.work)}</b> {plural(count((d) => d.work), 'смена', 'смены', 'смен')}
             </span>
-            {count((d) => d.pending) > 0 && <span className="warn-text">⏳ {count((d) => d.pending)} ждут прибыль</span>}
-            {count((d) => d.kind === 'vacation') > 0 && <span>🏖️ {count((d) => d.kind === 'vacation')} отпуск</span>}
-            {count((d) => d.kind === 'sick') > 0 && <span>🤒 {count((d) => d.kind === 'sick')} больн.</span>}
-            {count((d) => d.profit > 0) > 0 && (
-              <span>
-                прибыль {money(inMonth.reduce((s, d) => s + d.profit, 0))}
-              </span>
+            {['off', 'absent', 'sick', 'vacation'].map((k) =>
+              count((d) => d.kind === k) > 0 ? (
+                <span key={k}>
+                  {DAY_KIND[k].icon} {count((d) => d.kind === k)} {DAY_KIND[k].label.toLowerCase()}
+                </span>
+              ) : null
             )}
+            {count((d) => d.pending) > 0 && <span className="warn-text">⏳ {count((d) => d.pending)} без прибыли</span>}
+            {inMonth.some((d) => d.profit) && <span>прибыль {money(inMonth.reduce((s, d) => s + d.profit, 0))}</span>}
           </div>
           <div
             ref={gridRef}
@@ -275,24 +283,18 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
                 title={`${dayLabel(d.date, { weekday: 'long', day: 'numeric', month: 'long' })}${d.note ? ` · ${d.note}` : ''}`}
               >
                 <span className="cal-n">{Number(d.date.slice(8))}</span>
-                {d.kind ? <span className="cal-k">{DAY_KIND[d.kind].short}</span> : null}
+                {d.kind && d.kind !== 'work' ? <span className="cal-k">{DAY_KIND[d.kind]?.short}</span> : null}
                 {d.pending ? <span className="cal-p cal-wait">⏳</span> : d.filled || d.profit ? <span className="cal-p">{moneyShort(d.profit)}</span> : null}
               </div>
             ))}
           </div>
           <div className="cal-legend">
-            <span>⏳ прибыль не заполнена — оклад ещё не начислен</span>
-            <span>
-              <i className="k-plan" /> рабочий по графику
-            </span>
-            <span>
-              <i className="k-rest" /> выходной по графику
-            </span>
             {Object.entries(DAY_KIND).map(([k, v]) => (
               <span key={k}>
-                <i className={v.cls} /> {k === 'work' ? 'доп. смена' : v.label.toLowerCase()}
+                <i className={v.cls} /> {v.label}
               </span>
             ))}
+            <span>⏳ прибыль не заполнена</span>
           </div>
           {!readOnly && !sel.size && (
             <p className="muted small sched-help">
@@ -319,14 +321,16 @@ export function ScheduleCalendar({ userId, readOnly = false, onChanged }) {
             <DayProfitForm key={[...sel][0]} userId={userId} day={byDate.get([...sel][0]) || { date: [...sel][0] }} onSaved={() => (setSel(new Set()), reload(), onChanged?.())} />
           )}
           <div className="sched-actions">
-            {Object.entries(DAY_KIND).map(([k, v]) => (
-              <button key={k} type="button" className={`btn btn-sm kind-btn ${v.cls}`} disabled={busy} onClick={() => markSelected(k)}>
+            {ACTIONS.map((v) => (
+              <button
+                key={v.label}
+                type="button"
+                className={`btn btn-sm kind-btn ${v.cls} ${sel.size === 1 && (byDate.get([...sel][0])?.kind ?? null) === v.kind ? 'on' : ''}`}                 disabled={busy}
+                onClick={() => markSelected(v.kind)}
+              >
                 <span>{v.icon}</span> {v.label}
               </button>
             ))}
-            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => markSelected(null)}>
-              ↺ Как по графику
-            </button>
           </div>
         </div>
       )}
@@ -374,7 +378,7 @@ function RangeForm({ month, busy, onApply, onSelect }) {
   const t = todayKey();
   const [f, setF] = useState(() => {
     const from = monthOf(t) === month ? t : `${month}-01`;
-    return { from, to: addDays(from, 13), kind: 'work', pattern: 'all' };
+    return { from, to: addDays(from, 13), kind: 'off', pattern: 'all' };
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const valid = f.from && f.to && f.from <= f.to;
@@ -392,12 +396,12 @@ function RangeForm({ month, busy, onApply, onSelect }) {
     e.preventDefault();
     if (!valid) return;
     if (days.length > 400) return;
-    const kind = f.kind === 'reset' ? null : f.kind;
+    const kind = f.kind === 'work' ? null : f.kind;
     if (cycle) {
       const s = split();
       onApply(
         [
-          { dates: s.work, kind: 'work' },
+          { dates: s.work, kind: null },
           { dates: s.off, kind: 'off' },
         ],
         `График ${PATTERNS[f.pattern].label}: ${s.work.length} смен, ${s.off.length} выходных`
@@ -421,19 +425,19 @@ function RangeForm({ month, busy, onApply, onSelect }) {
           size="sm"
           value={f.kind}
           onChange={(kind) => setF({ ...f, kind })}
-          options={[...Object.entries(DAY_KIND).map(([value, v]) => ({ value, label: `${v.icon} ${v.label}` })), { value: 'reset', label: '↺ По графику' }]}
+          options={Object.entries(DAY_KIND).map(([value, v]) => ({ value, label: `${v.icon} ${v.label}` }))}
         />
       </div>
       {f.kind === 'work' && (
         <div className="field">
-          <span className="field-label">Чередование смен</span>
+          <span className="field-label">Чередование смен и выходных</span>
           <Seg size="sm" value={f.pattern} onChange={(pattern) => setF({ ...f, pattern })} options={Object.entries(PATTERNS).map(([value, p]) => ({ value, label: p.label }))} />
         </div>
       )}
       {valid && (
         <div className="range-preview">
           {days.slice(0, 42).map((d) => (
-            <i key={d} className={cycle ? (s.work.includes(d) ? 'k-work' : 'k-off') : f.kind === 'reset' ? 'k-plan' : DAY_KIND[f.kind].cls} title={dayLabel(d)} />
+            <i key={d} className={cycle ? (s.work.includes(d) ? 'k-plan' : 'k-off') : DAY_KIND[f.kind].cls} title={dayLabel(d)} />
           ))}
           {days.length > 42 && <span className="muted small">+{days.length - 42}</span>}
         </div>

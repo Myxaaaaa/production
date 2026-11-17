@@ -263,7 +263,42 @@ const migrations = [
     // Уже прошедшие рабочие дни считаем заполненными — начисленное за прошлое не меняется.
     run: () => backfillDayReports(),
   },
+  {
+    // График без выходных по умолчанию: каждый день — смена, выходные и прочее ставит администратор.
+    // Новый статус дня «невыход». Отметки «Невыход: …» из старой версии становятся невыходами.
+    version: 6,
+    name: 'every_day_shift_and_absent',
+    sql: `
+      CREATE TABLE days_off_new (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date    TEXT NOT NULL,
+        kind    TEXT NOT NULL CHECK (kind IN ('off','absent','sick','vacation','work')),
+        note    TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (user_id, date)
+      );
+      INSERT INTO days_off_new (user_id, date, kind, note)
+        SELECT user_id, date, CASE WHEN kind = 'off' AND note LIKE 'Невыход%' THEN 'absent' ELSE kind END, note FROM days_off;
+      DROP TABLE days_off;
+      ALTER TABLE days_off_new RENAME TO days_off;
+    `,
+    // Дни, которые раньше были выходными по недельному графику, остаются выходными (прошлое не меняется),
+    // а дальше по умолчанию — смена.
+    run: () => keepPastWeekends(),
+  },
 ];
+
+function keepPastWeekends() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'tz'").get();
+  const tz = row && validTz(row.value) ? row.value : 'Asia/Bishkek';
+  const yesterday = addDays(local(Date.now(), tz).date, -1);
+  const put = db.prepare("INSERT OR IGNORE INTO days_off (user_id, date, kind) VALUES (?, ?, 'off')");
+  for (const u of db.prepare('SELECT id, work_days, pay_start FROM users WHERE pay_start IS NOT NULL AND work_days != 127').all()) {
+    for (let d = u.pay_start; d <= yesterday; d = addDays(d, 1)) {
+      if (((u.work_days >> dowOf(d)) & 1) === 0) put.run(u.id, d);
+    }
+  }
+  db.exec('UPDATE users SET work_days = 127');
+}
 
 function backfillDayReports() {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'tz'").get();
